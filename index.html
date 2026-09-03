@@ -5,15 +5,68 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#06090f" />
-    <title>SpaceIQ — Disponibilidad en tiempo real</title>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { background: #06090f; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
-      #root { min-height: 100vh; }
-    </style>
-    <script type="module" crossorigin src="/assets/index-DgYL8q9y.js"></script>
+    <title>SpaceIQ — Disponibilidad de mesas en tiempo real</title>
+    <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <div id="root"></div>
+    <header class="topbar">
+      <div class="brand">
+        <img src="/favicon.svg" alt="" width="28" height="28" />
+        <span>SpaceIQ</span>
+      </div>
+      <div class="status-pill" id="modelStatus">Cargando modelo de detección…</div>
+    </header>
+
+    <main class="layout">
+      <section class="video-panel">
+        <div class="video-toolbar">
+          <div class="source-select">
+            <label>
+              <input type="radio" name="source" value="webcam" checked />
+              Cámara del dispositivo
+            </label>
+            <label>
+              <input type="radio" name="source" value="ipcam" />
+              Cámara WiFi (URL)
+            </label>
+          </div>
+          <div class="ipcam-url" id="ipcamUrlWrap" hidden>
+            <input type="text" id="ipcamUrl" placeholder="http://192.168.1.50/video (stream MJPEG)" />
+            <button id="connectIpcam">Conectar</button>
+          </div>
+          <button id="toggleDetection" class="primary" disabled>Iniciar detección</button>
+        </div>
+
+        <div class="stage" id="stage">
+          <video id="webcamFeed" autoplay muted playsinline hidden></video>
+          <img id="ipcamFeed" alt="Cámara WiFi" hidden />
+          <canvas id="overlay"></canvas>
+          <div class="stage-empty" id="stageEmpty">Selecciona una fuente de video para comenzar</div>
+        </div>
+
+        <div class="zone-tools">
+          <button id="addZone">+ Marcar mesa</button>
+          <span class="hint" id="zoneHint">Arrastra sobre el video para dibujar el área de una mesa.</span>
+          <button id="clearZones" class="ghost">Borrar todas las mesas</button>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <h2>Mesas <span id="tableCount">(0)</span></h2>
+        <div class="summary">
+          <div class="summary-chip free"><strong id="freeCount">0</strong> vacías</div>
+          <div class="summary-chip busy"><strong id="busyCount">0</strong> ocupadas</div>
+        </div>
+        <ul id="tableList" class="table-list"></ul>
+        <p class="footnote">
+          La detección corre 100% en tu navegador (TensorFlow.js). No se envía video
+          ni datos a ningún servidor ni base de datos.
+        </p>
+      </aside>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+    <script src="/app.js"></script>
   </body>
 </html>
