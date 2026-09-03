@@ -215,7 +215,9 @@
   // ---------- Zones: drawing ----------
   addZoneBtn.addEventListener('click', () => {
     isDrawingZone = true;
-    zoneHint.textContent = 'Arrastra sobre el video para dibujar el área de la nueva mesa.';
+    addZoneBtn.classList.add('active');
+    canvas.classList.add('drawing');
+    zoneHint.textContent = 'Arrastra sobre el video para dibujar el área de la nueva mesa (o toca un punto para una mesa de tamaño estándar).';
   });
 
   clearZonesBtn.addEventListener('click', () => {
@@ -245,26 +247,47 @@
     return { x: (rect.width - width) / 2, y: (rect.height - height) / 2, width, height };
   }
 
-  canvas.addEventListener('mousedown', (e) => {
+  canvas.addEventListener('pointerdown', (e) => {
     if (!isDrawingZone) return;
+    canvas.setPointerCapture(e.pointerId);
     const rect = canvas.getBoundingClientRect();
     dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     dragCurrent = dragStart;
   });
 
-  canvas.addEventListener('mousemove', (e) => {
+  canvas.addEventListener('pointermove', (e) => {
     if (!isDrawingZone || !dragStart) return;
     const rect = canvas.getBoundingClientRect();
     dragCurrent = { x: e.clientX - rect.left, y: e.clientY - rect.top };
   });
 
-  window.addEventListener('mouseup', () => {
-    if (!isDrawingZone || !dragStart || !dragCurrent) return;
+  canvas.addEventListener('pointerup', (e) => {
+    if (!isDrawingZone || !dragStart) return;
+    const rect = canvas.getBoundingClientRect();
+    dragCurrent = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    finishDrawingZone();
+    canvas.releasePointerCapture(e.pointerId);
+  });
+
+  canvas.addEventListener('pointercancel', cancelDrawingZone);
+
+  function finishDrawingZone() {
+    if (!dragStart || !dragCurrent) return;
     const containRect = getContainRect();
-    const x1 = Math.min(dragStart.x, dragCurrent.x);
-    const y1 = Math.min(dragStart.y, dragCurrent.y);
-    const x2 = Math.max(dragStart.x, dragCurrent.x);
-    const y2 = Math.max(dragStart.y, dragCurrent.y);
+    let x1 = Math.min(dragStart.x, dragCurrent.x);
+    let y1 = Math.min(dragStart.y, dragCurrent.y);
+    let x2 = Math.max(dragStart.x, dragCurrent.x);
+    let y2 = Math.max(dragStart.y, dragCurrent.y);
+
+    // A tap/click instead of a drag: create a default-size box centered on the point.
+    if (x2 - x1 < 6 && y2 - y1 < 6) {
+      const defaultW = containRect.width * 0.18;
+      const defaultH = containRect.height * 0.18;
+      x1 = dragStart.x - defaultW / 2;
+      y1 = dragStart.y - defaultH / 2;
+      x2 = dragStart.x + defaultW / 2;
+      y2 = dragStart.y + defaultH / 2;
+    }
 
     const fx = clamp01((x1 - containRect.x) / containRect.width);
     const fy = clamp01((y1 - containRect.y) / containRect.height);
@@ -288,11 +311,17 @@
       saveZones();
       renderTableList();
     }
+    cancelDrawingZone();
+  }
+
+  function cancelDrawingZone() {
     isDrawingZone = false;
+    addZoneBtn.classList.remove('active');
+    canvas.classList.remove('drawing');
     dragStart = null;
     dragCurrent = null;
     zoneHint.textContent = 'Arrastra sobre el video para dibujar el área de una mesa.';
-  });
+  }
 
   function clamp01(v) {
     return Math.max(0, Math.min(1, v));

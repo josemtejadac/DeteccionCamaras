@@ -147,6 +147,16 @@ button.ghost {
   object-fit: contain;
 }
 
+.stage canvas.drawing {
+  cursor: crosshair;
+}
+
+#addZone.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+
 .stage-empty {
   position: absolute;
   inset: 0;
