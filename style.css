@@ -167,6 +167,11 @@ button.ghost {
   font-size: 14px;
   text-align: center;
   padding: 20px;
+  pointer-events: none;
+}
+
+.stage-empty[hidden] {
+  display: none;
 }
 
 .zone-tools {
