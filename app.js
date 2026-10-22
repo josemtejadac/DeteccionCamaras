@@ -616,5 +616,16 @@ function runSender(targetId) {
   }
 
   retryBtn.addEventListener('click', start);
+
+  // Landscape lock only works in fullscreen on Android Chrome; elsewhere the user just rotates the phone.
+  document.getElementById('senderLandscape').addEventListener('click', async () => {
+    try {
+      await document.documentElement.requestFullscreen();
+      await screen.orientation.lock('landscape');
+    } catch {
+      status.textContent = 'No se pudo forzar horizontal. Gira el celular manualmente.';
+    }
+  });
+
   start();
 }
