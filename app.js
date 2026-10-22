@@ -190,7 +190,7 @@
       phoneStatus.textContent = 'No se pudieron cargar las librerías de conexión. Revisa tu internet.';
       return;
     }
-    const id = 'spaceiq-' + Math.random().toString(36).slice(2, 12);
+    const id = 'hubvision-' + Math.random().toString(36).slice(2, 12);
     phonePanel.hidden = false;
     phoneStatus.textContent = 'Preparando conexión…';
     qrBox.innerHTML = '';
