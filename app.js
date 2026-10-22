@@ -1,4 +1,11 @@
 (function () {
+  // Opened from the QR code on a phone: act only as a camera sender.
+  const senderTarget = new URLSearchParams(location.search).get('cam');
+  if (senderTarget) {
+    runSender(senderTarget);
+    return;
+  }
+
   const stage = document.getElementById('stage');
   const stageEmpty = document.getElementById('stageEmpty');
   const video = document.getElementById('webcamFeed');
@@ -18,6 +25,9 @@
   const ipcamUrlInput = document.getElementById('ipcamUrl');
   const connectIpcamBtn = document.getElementById('connectIpcam');
   const sourceRadios = document.querySelectorAll('input[name="source"]');
+  const phonePanel = document.getElementById('phonePanel');
+  const phoneStatus = document.getElementById('phoneStatus');
+  const qrBox = document.getElementById('qrcode');
 
   const STORAGE_KEY = 'spaceiq.tables.v1';
 
@@ -32,6 +42,8 @@
   let dragCurrent = null;
   let zoneCounter = zones.reduce((max, z) => Math.max(max, z.n || 0), 0);
   let webcamStream = null;
+  let phonePeer = null;
+  let phoneCall = null;
 
   function loadZones() {
     try {
@@ -66,10 +78,20 @@
 
   function onSourceChange(e) {
     stopDetection();
+    stopPhone();
     if (e.target.value === 'webcam') {
       ipcamUrlWrap.hidden = true;
       stopIpcam();
       startWebcam();
+    } else if (e.target.value === 'phone') {
+      ipcamUrlWrap.hidden = true;
+      stopIpcam();
+      stopWebcam();
+      activeMedia = null;
+      video.hidden = true;
+      stageEmpty.hidden = true;
+      updateToggleAvailability();
+      startPhone();
     } else {
       ipcamUrlWrap.hidden = false;
       stopWebcam();
@@ -79,6 +101,74 @@
       stageEmpty.textContent = 'Ingresa la URL de la cámara WiFi y presiona Conectar';
       updateToggleAvailability();
     }
+  }
+
+  // ---------- Phone camera over WebRTC (QR pairing) ----------
+  function startPhone() {
+    if (typeof Peer === 'undefined' || typeof QRCode === 'undefined') {
+      phonePanel.hidden = false;
+      phoneStatus.textContent = 'No se pudieron cargar las librerías de conexión. Revisa tu internet.';
+      return;
+    }
+    const id = 'spaceiq-' + Math.random().toString(36).slice(2, 12);
+    phonePanel.hidden = false;
+    phoneStatus.textContent = 'Preparando conexión…';
+    qrBox.innerHTML = '';
+
+    const peer = new Peer(id);
+    phonePeer = peer;
+
+    peer.on('open', () => {
+      const link = location.origin + location.pathname + '?cam=' + id;
+      qrBox.innerHTML = '';
+      new QRCode(qrBox, { text: link, width: 200, height: 200 });
+      phoneStatus.textContent = 'Esperando al celular…';
+    });
+
+    peer.on('call', (call) => {
+      if (phoneCall) phoneCall.close();
+      phoneCall = call;
+      call.answer();
+      call.on('stream', (remote) => {
+        video.srcObject = remote;
+        video.hidden = false;
+        img.hidden = true;
+        phonePanel.hidden = true;
+        stageEmpty.hidden = true;
+        activeMedia = 'video';
+        video.play().catch(() => {});
+        updateToggleAvailability();
+      });
+      call.on('close', () => {
+        if (phoneCall !== call) return;
+        stopDetection();
+        video.srcObject = null;
+        video.hidden = true;
+        activeMedia = null;
+        phonePanel.hidden = false;
+        phoneStatus.textContent = 'El celular se desconectó. Esperando de nuevo…';
+        updateToggleAvailability();
+      });
+    });
+
+    peer.on('error', (err) => {
+      phoneStatus.textContent = 'Error de conexión (' + err.type + '). Vuelve a elegir esta opción.';
+    });
+  }
+
+  function stopPhone() {
+    if (phoneCall) {
+      const call = phoneCall;
+      phoneCall = null;
+      call.close();
+    }
+    if (phonePeer) {
+      phonePeer.destroy();
+      phonePeer = null;
+    }
+    phonePanel.hidden = true;
+    qrBox.innerHTML = '';
+    if (!webcamStream) video.srcObject = null;
   }
 
   async function startWebcam() {
@@ -448,3 +538,83 @@
   // Default to webcam on load
   startWebcam();
 })();
+
+// Phone side: capture the camera and send it to the PC that showed the QR.
+function runSender(targetId) {
+  document.body.classList.add('sender-mode');
+  const view = document.getElementById('senderView');
+  const preview = document.getElementById('senderPreview');
+  const status = document.getElementById('senderStatus');
+  const retryBtn = document.getElementById('senderRetry');
+  view.hidden = false;
+
+  let stream = null;
+  let peer = null;
+  let reconnectTimer = null;
+
+  async function start() {
+    retryBtn.hidden = true;
+    try {
+      if (!stream) {
+        status.textContent = 'Solicitando acceso a la cámara…';
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        preview.srcObject = stream;
+      }
+      try {
+        if (navigator.wakeLock) await navigator.wakeLock.request('screen');
+      } catch {
+        // wake lock is best-effort
+      }
+      connect();
+    } catch (err) {
+      status.textContent = 'No se pudo acceder a la cámara: ' + err.message;
+      retryBtn.hidden = false;
+    }
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 3000);
+  }
+
+  function connect() {
+    if (peer) peer.destroy();
+    status.textContent = 'Conectando con el PC…';
+    peer = new Peer();
+
+    peer.on('open', () => {
+      const call = peer.call(targetId, stream);
+      const pc = call.peerConnection;
+      if (pc) {
+        pc.addEventListener('connectionstatechange', () => {
+          if (pc.connectionState === 'connected') {
+            status.textContent = 'Transmitiendo al PC ✓';
+          } else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+            status.textContent = 'Conexión perdida. Reintentando…';
+            scheduleReconnect();
+          }
+        });
+      }
+      call.on('close', () => {
+        status.textContent = 'Conexión cerrada. Reintentando…';
+        scheduleReconnect();
+      });
+    });
+
+    peer.on('error', (err) => {
+      if (err.type === 'peer-unavailable') {
+        status.textContent = 'El PC no está esperando. En el PC elige "Cámara de celular (QR)" y escanea el código nuevo.';
+        retryBtn.hidden = false;
+      } else {
+        status.textContent = 'Error de conexión (' + err.type + '). Reintentando…';
+        scheduleReconnect();
+      }
+    });
+  }
+
+  retryBtn.addEventListener('click', start);
+  start();
+}

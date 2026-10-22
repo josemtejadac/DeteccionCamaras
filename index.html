@@ -29,6 +29,10 @@
               <input type="radio" name="source" value="ipcam" />
               Cámara WiFi (URL)
             </label>
+            <label>
+              <input type="radio" name="source" value="phone" />
+              Cámara de celular (QR)
+            </label>
           </div>
           <div class="ipcam-url" id="ipcamUrlWrap" hidden>
             <input type="text" id="ipcamUrl" placeholder="http://192.168.1.50/video (stream MJPEG)" />
@@ -42,6 +46,11 @@
           <img id="ipcamFeed" alt="Cámara WiFi" hidden />
           <canvas id="overlay"></canvas>
           <div class="stage-empty" id="stageEmpty">Selecciona una fuente de video para comenzar</div>
+          <div class="phone-panel" id="phonePanel" hidden>
+            <div class="qr-box" id="qrcode"></div>
+            <p id="phoneStatus">Preparando conexión…</p>
+            <p class="hint">Escanea el QR con la cámara de tu celular y permite el acceso a la cámara.</p>
+          </div>
         </div>
 
         <div class="zone-tools">
@@ -65,6 +74,15 @@
       </aside>
     </main>
 
+    <section class="sender-view" id="senderView" hidden>
+      <video id="senderPreview" autoplay muted playsinline></video>
+      <p id="senderStatus">Iniciando…</p>
+      <button id="senderRetry" class="primary" hidden>Reintentar</button>
+      <p class="hint">Deja esta pantalla abierta y el celular apuntando a las mesas.</p>
+    </section>
+
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
     <script src="/app.js"></script>
