@@ -291,6 +291,51 @@ button.ghost {
   color: var(--muted);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+body:not(.is-admin) .admin-only { display: none; }
+
+body:not(.is-admin) .layout {
+  grid-template-columns: 1fr;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+body:not(.is-admin) .table-row .remove { display: none; }
+body:not(.is-admin) .table-row .name { pointer-events: none; }
+
+dialog {
+  margin: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  width: min(320px, 90vw);
+}
+
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+
+dialog form { display: flex; flex-direction: column; gap: 10px; }
+
+dialog input {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+.login-error { color: var(--busy); font-size: 13px; }
+.login-error[hidden] { display: none; }
+.login-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.login-actions button.primary { margin-left: 0; }
+
 .phone-panel {
   position: absolute;
   inset: 0;

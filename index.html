@@ -14,11 +14,27 @@
         <img src="/favicon.svg" alt="" width="28" height="28" />
         <span>SpaceIQ</span>
       </div>
-      <div class="status-pill" id="modelStatus">Cargando modelo de detección…</div>
+      <div class="header-actions">
+        <div class="status-pill admin-only" id="modelStatus">Cargando modelo de detección…</div>
+        <button id="adminBtn">Admin</button>
+      </div>
     </header>
 
+    <dialog id="loginDialog">
+      <form id="loginForm" method="dialog">
+        <h3>Acceso admin</h3>
+        <input type="text" id="loginUser" placeholder="Usuario" autocomplete="username" required />
+        <input type="password" id="loginPass" placeholder="Clave" autocomplete="current-password" required />
+        <p class="login-error" id="loginError" hidden>Usuario o clave incorrectos.</p>
+        <div class="login-actions">
+          <button type="button" id="loginCancel" class="ghost">Cancelar</button>
+          <button type="submit" class="primary">Entrar</button>
+        </div>
+      </form>
+    </dialog>
+
     <main class="layout">
-      <section class="video-panel">
+      <section class="video-panel admin-only">
         <div class="video-toolbar">
           <div class="source-select">
             <label>

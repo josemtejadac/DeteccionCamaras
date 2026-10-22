@@ -28,6 +28,18 @@
   const phonePanel = document.getElementById('phonePanel');
   const phoneStatus = document.getElementById('phoneStatus');
   const qrBox = document.getElementById('qrcode');
+  const adminBtn = document.getElementById('adminBtn');
+  const loginDialog = document.getElementById('loginDialog');
+  const loginForm = document.getElementById('loginForm');
+  const loginUser = document.getElementById('loginUser');
+  const loginPass = document.getElementById('loginPass');
+  const loginError = document.getElementById('loginError');
+  const loginCancel = document.getElementById('loginCancel');
+
+  // Simple demo login for a class project: credentials live in the client, so this only hides the UI.
+  const ADMIN_USER = 'admin';
+  const ADMIN_PASS = '12345';
+  const ADMIN_KEY = 'spaceiq.admin';
 
   const STORAGE_KEY = 'spaceiq.tables.v1';
 
@@ -71,7 +83,75 @@
       console.error(err);
     }
   }
-  loadModel();
+  let modelRequested = false;
+  function ensureModel() {
+    if (modelRequested) return;
+    modelRequested = true;
+    loadModel();
+  }
+
+  // ---------- Admin login ----------
+  function isAdmin() {
+    try {
+      return sessionStorage.getItem(ADMIN_KEY) === '1';
+    } catch {
+      return document.body.classList.contains('is-admin');
+    }
+  }
+
+  function applyRole() {
+    const admin = isAdmin();
+    document.body.classList.toggle('is-admin', admin);
+    adminBtn.textContent = admin ? 'Cerrar sesión' : 'Admin';
+    renderTableList();
+    if (admin) {
+      ensureModel();
+      const source = document.querySelector('input[name="source"]:checked').value;
+      if (source === 'webcam' && !webcamStream) startWebcam();
+    } else {
+      stopDetection();
+      stopWebcam();
+      stopPhone();
+      stopIpcam();
+      activeMedia = null;
+      updateToggleAvailability();
+    }
+  }
+
+  adminBtn.addEventListener('click', () => {
+    if (isAdmin()) {
+      try {
+        sessionStorage.removeItem(ADMIN_KEY);
+      } catch {
+        // storage unavailable
+      }
+      document.body.classList.remove('is-admin');
+      applyRole();
+      return;
+    }
+    loginError.hidden = true;
+    loginForm.reset();
+    loginDialog.showModal();
+    loginUser.focus();
+  });
+
+  loginCancel.addEventListener('click', () => loginDialog.close());
+
+  loginForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (loginUser.value.trim() === ADMIN_USER && loginPass.value === ADMIN_PASS) {
+      try {
+        sessionStorage.setItem(ADMIN_KEY, '1');
+      } catch {
+        // storage unavailable: role only lasts until reload
+      }
+      document.body.classList.add('is-admin');
+      loginDialog.close();
+      applyRole();
+    } else {
+      loginError.hidden = false;
+    }
+  });
 
   // ---------- Media source ----------
   sourceRadios.forEach((r) => r.addEventListener('change', onSourceChange));
@@ -495,7 +575,7 @@
     if (!zones.length) {
       const li = document.createElement('li');
       li.className = 'empty-list';
-      li.textContent = 'Aún no has marcado ninguna mesa.';
+      li.textContent = isAdmin() ? 'Aún no has marcado ninguna mesa.' : 'Aún no hay mesas para mostrar.';
       tableList.appendChild(li);
       return;
     }
@@ -510,6 +590,7 @@
       const nameInput = document.createElement('input');
       nameInput.className = 'name';
       nameInput.value = zone.name;
+      nameInput.readOnly = !isAdmin();
       nameInput.addEventListener('change', () => {
         zone.name = nameInput.value.trim() || zone.name;
         saveZones();
@@ -533,10 +614,8 @@
     });
   }
 
-  renderTableList();
-
-  // Default to webcam on load
-  startWebcam();
+  // Public visitors never trigger the camera or the model; only an admin session does.
+  applyRole();
 })();
 
 // Phone side: capture the camera and send it to the PC that showed the QR.
