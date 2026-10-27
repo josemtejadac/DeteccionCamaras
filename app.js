@@ -43,6 +43,20 @@
 
   const STORAGE_KEY = 'spaceiq.tables.v1';
 
+  // Occupancy rules: a table stays occupied for GRACE_MS after the person leaves, and stays
+  // "away" (unavailable) while personal objects remain on it, up to AWAY_MAX_MS.
+  // ?grace=<minutes> in the URL overrides the grace period (handy for demos and tests).
+  // ?confirm=<seconds> overrides the confirmation time (0 disables it).
+  const urlParams = new URLSearchParams(location.search);
+  const graceParam = parseFloat(urlParams.get('grace'));
+  const GRACE_MS = (Number.isFinite(graceParam) && graceParam >= 0 ? graceParam : 8) * 60 * 1000;
+  const confirmParam = parseFloat(urlParams.get('confirm'));
+  const CONFIRM_MS = (Number.isFinite(confirmParam) && confirmParam >= 0 ? confirmParam : 5) * 1000;
+  const AWAY_MAX_MS = 30 * 60 * 1000;
+  const OBJECT_CLASSES = ['laptop', 'backpack', 'handbag', 'suitcase', 'book', 'cell phone'];
+  const OBJECT_MIN_SCORE = 0.4;
+  const OBJECT_HOLD_MS = 20 * 1000; // bridges frames where an object is momentarily missed
+
   let model = null;
   let activeMedia = null; // 'video' | 'img' | null
   let detecting = false;
@@ -60,14 +74,16 @@
   function loadZones() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      const saved = raw ? JSON.parse(raw) : [];
+      return saved.map((z) => ({ ...z, occupied: false, status: 'free', lastSeenAt: null, objectSeenAt: null, pendingSince: null }));
     } catch {
       return [];
     }
   }
 
   function saveZones() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(zones));
+    const persistent = zones.map(({ id, n, name, x, y, w, h }) => ({ id, n, name, x, y, w, h }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistent));
   }
 
   // ---------- Model ----------
@@ -365,11 +381,61 @@
         h: p.bbox[3] / size.height,
       }));
 
-    zones.forEach((zone) => {
-      zone.occupied = latestPersons.some((p) => overlapRatio(p, zone) > 0.12);
-    });
+    const objects = predictions
+      .filter((p) => OBJECT_CLASSES.includes(p.class) && p.score > OBJECT_MIN_SCORE)
+      .map((p) => ({
+        cx: (p.bbox[0] + p.bbox[2] / 2) / size.width,
+        cy: (p.bbox[1] + p.bbox[3] / 2) / size.height,
+      }));
+
+    const now = Date.now();
+    zones.forEach((zone) => updateZoneStatus(zone, objects, now));
     renderTableList();
   }
+
+  function updateZoneStatus(zone, objects, now) {
+    const personPresent = latestPersons.some((p) => overlapRatio(p, zone) > 0.12);
+    const objectNow = objects.some(
+      (o) => o.cx >= zone.x && o.cx <= zone.x + zone.w && o.cy >= zone.y && o.cy <= zone.y + zone.h
+    );
+    if (objectNow) zone.objectSeenAt = now;
+    const hasObjects = zone.objectSeenAt && now - zone.objectSeenAt < OBJECT_HOLD_MS;
+
+    let rawStatus;
+    if (personPresent) {
+      zone.lastSeenAt = now;
+      rawStatus = 'busy';
+    } else {
+      // Objects with nobody ever seen: start the clock as if the person just left.
+      if (!zone.lastSeenAt && hasObjects) zone.lastSeenAt = now;
+      const elapsed = zone.lastSeenAt ? now - zone.lastSeenAt : Infinity;
+      if (elapsed < GRACE_MS) rawStatus = 'grace';
+      else if (hasObjects && elapsed < AWAY_MAX_MS) rawStatus = 'away';
+      else rawStatus = 'free';
+    }
+
+    // A change between occupied and available only shows after CONFIRM_MS of the new reading,
+    // so someone walking past a zone does not flip its state.
+    const rawOccupied = rawStatus !== 'free';
+    if (rawOccupied === zone.occupied) {
+      zone.pendingSince = null;
+      zone.status = rawStatus;
+    } else {
+      if (!zone.pendingSince) zone.pendingSince = now;
+      if (now - zone.pendingSince >= CONFIRM_MS) {
+        zone.pendingSince = null;
+        zone.status = rawStatus;
+        zone.occupied = rawOccupied;
+      }
+    }
+  }
+
+  const STATUS_LABELS = {
+    busy: 'Ocupada',
+    grace: 'Ocupada (ausencia temporal)',
+    away: 'Ausente temporal (objetos)',
+    free: 'Vacía',
+  };
 
   function overlapRatio(box, zone) {
     const ix = Math.max(box.x, zone.x);
@@ -477,6 +543,10 @@
         w: fw,
         h: fh,
         occupied: false,
+        status: 'free',
+        lastSeenAt: null,
+        objectSeenAt: null,
+        pendingSince: null,
       });
       saveZones();
       renderTableList();
@@ -521,15 +591,17 @@
       const h = zone.h * containRect.height;
 
       ctx.lineWidth = 2;
-      ctx.strokeStyle = zone.occupied ? '#ef4444' : '#22c55e';
-      ctx.fillStyle = zone.occupied ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.12)';
+      const color = zone.status === 'away' ? '#f59e0b' : zone.occupied ? '#ef4444' : '#22c55e';
+      const tint = zone.status === 'away' ? 'rgba(245,158,11,0.15)' : zone.occupied ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.12)';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = tint;
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
 
-      const label = zone.name + (zone.occupied ? ' · ocupada' : ' · vacía');
+      const label = zone.name + ' · ' + STATUS_LABELS[zone.status || 'free'].toLowerCase();
       ctx.font = '13px Inter, sans-serif';
       const labelWidth = ctx.measureText(label).width + 10;
-      ctx.fillStyle = zone.occupied ? '#ef4444' : '#22c55e';
+      ctx.fillStyle = color;
       ctx.fillRect(x, Math.max(0, y - 20), labelWidth, 20);
       ctx.fillStyle = '#06090f';
       ctx.fillText(label, x + 5, Math.max(14, y - 5));
@@ -582,7 +654,7 @@
 
     zones.forEach((zone) => {
       const li = document.createElement('li');
-      li.className = 'table-row' + (zone.occupied ? ' busy' : '');
+      li.className = 'table-row' + (zone.status === 'away' ? ' away' : zone.occupied ? ' busy' : '');
 
       const dot = document.createElement('span');
       dot.className = 'dot';
@@ -598,7 +670,7 @@
 
       const state = document.createElement('span');
       state.className = 'state';
-      state.textContent = zone.occupied ? 'Ocupada' : 'Vacía';
+      state.textContent = STATUS_LABELS[zone.status || 'free'];
 
       const remove = document.createElement('button');
       remove.className = 'remove';

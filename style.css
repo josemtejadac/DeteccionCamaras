@@ -256,6 +256,7 @@ button.ghost {
 }
 
 .table-row.busy .dot { background: var(--busy); }
+.table-row.away .dot { background: #f59e0b; }
 
 .table-row .name {
   flex: 1;
