@@ -94,6 +94,7 @@
   let liveLastSent = '';
   let viewerConn = null;
   let viewerRetry = null;
+  let viewerWatch = null;
   let viewerStaleTimer = null;
   let viewerLastMsg = 0;
   let demoTimer = null;
@@ -333,9 +334,15 @@
     liveStatusEl.classList.toggle('ok', !!ok);
   }
 
+  const NO_LIVE_INFO = 'Sin información en vivo por ahora';
+
   function startLiveViewer() {
-    if (typeof Peer === 'undefined' || livePeer) return;
-    setLiveStatus('Conectando con el monitoreo…');
+    if (livePeer) return;
+    if (typeof Peer === 'undefined') {
+      setLiveStatus(NO_LIVE_INFO);
+      return;
+    }
+    setLiveStatus('Conectando…');
     const peer = new Peer();
     livePeer = peer;
     peer.on('open', connectToHost);
@@ -344,11 +351,11 @@
     });
     peer.on('error', (err) => {
       if (err.type === 'peer-unavailable') {
-        setLiveStatus('El monitoreo no está activo en este momento. Reintentando…');
+        setLiveStatus(NO_LIVE_INFO);
         scheduleViewerRetry();
       } else {
         stopLiveViewer();
-        setLiveStatus('Sin conexión. Reintentando…');
+        setLiveStatus(NO_LIVE_INFO);
         setTimeout(() => {
           if (!isAdmin()) startLiveViewer();
         }, 5000);
@@ -358,7 +365,7 @@
       if (!viewerLastMsg) return;
       const secs = Math.floor((Date.now() - viewerLastMsg) / 1000);
       pubUpdatedEl.textContent = secs < 5 ? 'Actualizado ahora' : 'Actualizado hace ' + secs + ' s';
-      if (secs > 15) setLiveStatus('Sin señal del monitoreo. Los datos pueden estar desactualizados.', false);
+      if (secs > 15) setLiveStatus(NO_LIVE_INFO + ' (datos de hace ' + secs + ' s)', false);
     }, 1000);
   }
 
@@ -367,15 +374,23 @@
     if (viewerConn) viewerConn.close();
     const conn = livePeer.connect(LIVE_PEER_ID, { reliable: true });
     viewerConn = conn;
+    // If nothing arrives (for example the two networks cannot reach each other), say so and try again.
+    clearTimeout(viewerWatch);
+    viewerWatch = setTimeout(() => {
+      if (!viewerLastMsg && !isAdmin()) {
+        setLiveStatus(NO_LIVE_INFO);
+        scheduleViewerRetry();
+      }
+    }, 12000);
     conn.on('data', (msg) => {
       if (!msg || msg.type !== 'state' || !Array.isArray(msg.zones)) return;
       viewerLastMsg = Date.now();
       zones = msg.zones.map((z) => ({ ...z }));
-      setLiveStatus(msg.detecting ? 'En vivo' : 'Monitoreo en pausa: últimos datos recibidos', msg.detecting);
+      setLiveStatus(msg.detecting ? 'En vivo' : 'Última información disponible', msg.detecting);
       renderTableList();
     });
     conn.on('close', () => {
-      setLiveStatus('Se perdió la conexión con el monitoreo. Reintentando…');
+      setLiveStatus('Reconectando…');
       scheduleViewerRetry();
     });
   }
@@ -389,6 +404,7 @@
 
   function stopLiveViewer() {
     clearTimeout(viewerRetry);
+    clearTimeout(viewerWatch);
     clearInterval(viewerStaleTimer);
     viewerLastMsg = 0;
     if (viewerConn) {
@@ -1218,7 +1234,7 @@
       empty.className = 'pv-empty';
       empty.textContent = viewerLastMsg
         ? 'Aún no hay mesas configuradas.'
-        : 'Aún no hay datos. Aparecerán apenas el monitoreo esté activo.';
+        : 'La información en vivo no está disponible en este momento. Inténtalo de nuevo en unos minutos.';
       pubGroupsEl.appendChild(empty);
       return;
     }

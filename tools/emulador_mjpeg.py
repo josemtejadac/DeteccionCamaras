@@ -13,7 +13,7 @@ Requirements: Python 3 with Pillow (pip install pillow), and ADB debugging enabl
 
 Usage:
     python emulador_mjpeg.py [--modo video|capturas] [--adb RUTA] [--serial emulator-5554]
-                             [--port 8090] [--fps 10] [--width 960] [--crop x,y,ancho,alto]
+                             [--port 8090] [--fps 20] [--width 960] [--crop x,y,ancho,alto]
 """
 import argparse
 import subprocess
@@ -83,7 +83,28 @@ def screenshots_loop(adb, serial, crop, width, fps):
         time.sleep(max(0, interval - (time.time() - started)))
 
 
+def stop_guest_recorders(adb, serial):
+    """Stop any screenrecord still running inside the emulator (they pile up and slow it down)."""
+    try:
+        subprocess.run([adb, '-s', serial, 'shell', 'pkill', '-INT', 'screenrecord'], capture_output=True, timeout=8)
+    except Exception:
+        pass
+
+
 def video_loop(adb, serial, crop, width, fps):
+    """Keep trying: the emulator may still be starting, or may restart while this runs."""
+    last_error = None
+    while True:
+        try:
+            video_session(adb, serial, crop, width, fps)
+        except Exception as err:
+            if str(err) != last_error:
+                print('Esperando al emulador:', err, flush=True)
+                last_error = str(err)
+        time.sleep(3)
+
+
+def video_session(adb, serial, crop, width, fps):
     import av  # imported here so the screenshots mode works without it
 
     native_w, native_h = screenshot(adb, serial).size
@@ -101,6 +122,7 @@ def video_loop(adb, serial, crop, width, fps):
         '--bit-rate', '4000000', '--time-limit', '170', '-',
     ]
     while True:  # screenrecord stops after its time limit, so it is restarted
+        stop_guest_recorders(adb, serial)
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         codec = av.CodecContext.create('h264', 'r')
         last_emit = 0.0
@@ -196,7 +218,7 @@ def main():
     parser.add_argument('--adb', default=r'C:\LDPlayer\LDPlayer9\adb.exe', help='ruta de adb.exe de LDPlayer')
     parser.add_argument('--serial', default='emulator-5554', help='identificador del emulador en adb devices')
     parser.add_argument('--port', type=int, default=8090)
-    parser.add_argument('--fps', type=float, default=10, help='imágenes por segundo máximas que se sirven')
+    parser.add_argument('--fps', type=float, default=20, help='imágenes por segundo máximas que se sirven (el emulador llega a unas 15-18)')
     parser.add_argument('--width', type=int, default=960, help='ancho máximo de la imagen servida')
     parser.add_argument('--crop', default='', help='recorte x,y,ancho,alto sobre la pantalla del emulador')
     args = parser.parse_args()
@@ -228,6 +250,9 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if mode == 'video':
+            stop_guest_recorders(args.adb, args.serial)
 
 
 if __name__ == '__main__':
