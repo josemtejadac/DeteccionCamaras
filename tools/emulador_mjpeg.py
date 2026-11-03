@@ -8,6 +8,9 @@ window (which comes out black with some renderers). Two modes:
   - video (default): continuous H.264 screen recording decoded here. Smooth, needs `pip install av`.
   - capturas: one screenshot at a time. Slower (about 2-3 images per second) but needs no extra library.
 
+It is meant to stay running in the background: it only records the emulator while HubVision is
+asking for video, and it waits for the emulator / the port if they are not available yet.
+
 Requirements: Python 3 with Pillow (pip install pillow), and ADB debugging enabled in LDPlayer
 (Ajustes > Otros > Depuración ADB > Abrir conexión local).
 
@@ -16,6 +19,7 @@ Usage:
                              [--port 8090] [--fps 20] [--width 960] [--crop x,y,ancho,alto]
 """
 import argparse
+import queue
 import subprocess
 import sys
 import threading
@@ -25,22 +29,37 @@ from io import BytesIO
 
 from PIL import Image
 
+IDLE_SECONDS = 10  # stop recording the emulator when nobody has asked for video for this long
+STALE_SECONDS = 8  # a frame older than this no longer counts as live video
+
 
 class Latest:
-    """Most recent JPEG frame, shared between the capture thread and the HTTP handlers."""
+    """Most recent JPEG frame and demand bookkeeping, shared between threads."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.frame = None
+        self.frame_ts = 0.0
         self.seq = 0
+        self.demand_ts = 0.0  # last time a client asked for video
+        self.recording_since = 0.0
 
 
 state = Latest()
 
 
+def touch():
+    state.demand_ts = time.time()
+
+
+def wanted():
+    return time.time() - state.demand_ts <= IDLE_SECONDS
+
+
 def publish(jpeg):
     with state.lock:
         state.frame = jpeg
+        state.frame_ts = time.time()
         state.seq += 1
 
 
@@ -65,6 +84,9 @@ def screenshots_loop(adb, serial, crop, width, fps):
     interval = 1.0 / fps
     last_error = None
     while True:
+        if not wanted():
+            time.sleep(0.3)
+            continue
         started = time.time()
         try:
             img = screenshot(adb, serial)
@@ -74,6 +96,7 @@ def screenshots_loop(adb, serial, crop, width, fps):
             if width and img.width > width:
                 img = img.resize((width, round(img.height * width / img.width)), Image.BILINEAR)
             publish(to_jpeg(img))
+            state.recording_since = state.recording_since or started
             last_error = None
         except Exception as err:  # keep serving; the emulator may be restarting
             if str(err) != last_error:
@@ -104,6 +127,14 @@ def video_loop(adb, serial, crop, width, fps):
         time.sleep(3)
 
 
+def pump(proc, chunks):
+    while True:
+        chunk = proc.stdout.read1(65536)
+        chunks.put(chunk or None)
+        if not chunk:
+            return
+
+
 def video_session(adb, serial, crop, width, fps):
     import av  # imported here so the screenshots mode works without it
 
@@ -114,22 +145,30 @@ def video_session(adb, serial, crop, width, fps):
     scale = out_w / native_w
     crop_scaled = tuple(round(v * scale) for v in crop) if crop else None
     min_gap = 1.0 / fps
-    print('Video del emulador: %dx%d -> %dx%d' % (native_w, native_h, out_w, out_h))
+    print('Video del emulador: %dx%d -> %dx%d' % (native_w, native_h, out_w, out_h), flush=True)
 
     command = [
         adb, '-s', serial, 'exec-out', 'screenrecord',
         '--output-format=h264', '--size', '%dx%d' % (out_w, out_h),
         '--bit-rate', '4000000', '--time-limit', '170', '-',
     ]
-    while True:  # screenrecord stops after its time limit, so it is restarted
+    while True:
+        while not wanted():  # nobody is watching: leave the emulator alone
+            time.sleep(0.3)
         stop_guest_recorders(adb, serial)
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        state.recording_since = time.time()
+        chunks = queue.Queue()
+        threading.Thread(target=pump, args=(proc, chunks), daemon=True).start()
         codec = av.CodecContext.create('h264', 'r')
         last_emit = 0.0
         try:
-            while True:
-                chunk = proc.stdout.read1(65536)
-                if not chunk:
+            while wanted():
+                try:
+                    chunk = chunks.get(timeout=1)
+                except queue.Empty:
+                    continue
+                if chunk is None:  # screenrecord ended (its time limit): restart below
                     break
                 for packet in codec.parse(chunk):
                     for frame in codec.decode(packet):
@@ -143,10 +182,11 @@ def video_session(adb, serial, crop, width, fps):
                             img = img.crop((x, y, x + cw, y + ch))
                         publish(to_jpeg(img))
         except Exception as err:
-            print('Error en el video del emulador:', err)
+            print('Error en el video del emulador:', err, flush=True)
             time.sleep(2)
         finally:
             proc.kill()
+            stop_guest_recorders(adb, serial)
         time.sleep(0.3)
 
 
@@ -171,19 +211,33 @@ class Handler(BaseHTTPRequestHandler):
         if path in ('/', '/video', '/video.mjpg'):
             self.stream()
         elif path in ('/frame', '/frame.jpg'):
-            with state.lock:
-                frame = state.frame
-            if frame is None:
-                self.send_error(503, 'Sin imagen todavía')
-                return
+            self.single_frame()
+        else:
+            self.send_error(404)
+
+    def single_frame(self):
+        was_idle = not wanted()
+        touch()
+        with state.lock:
+            frame, ts = state.frame, state.frame_ts
+        fresh = frame is not None and time.time() - ts < STALE_SECONDS
+        if fresh:
             self.send_response(200)
             self.send_cors()
             self.send_header('Content-Type', 'image/jpeg')
             self.send_header('Content-Length', str(len(frame)))
             self.end_headers()
             self.wfile.write(frame)
+        elif was_idle or time.time() - state.recording_since < STALE_SECONDS:
+            # Just woke up or still warming up: not a problem yet.
+            self.send_response(204)
+            self.send_cors()
+            self.end_headers()
         else:
-            self.send_error(404)
+            self.send_response(503)  # recording, but the emulator is not producing new video
+            self.send_cors()
+            self.send_header('Content-Length', '0')
+            self.end_headers()
 
     def stream(self):
         self.send_response(200)
@@ -194,12 +248,15 @@ class Handler(BaseHTTPRequestHandler):
         last_sent = 0.0
         try:
             while True:
+                touch()
                 with state.lock:
-                    seq, frame = state.seq, state.frame
+                    seq, frame, ts = state.seq, state.frame, state.frame_ts
+                live = frame is not None and time.time() - ts < STALE_SECONDS
                 # The recording only produces frames when the screen changes: repeat the last one
-                # every second so the browser does not think the stream stalled.
-                stale = time.time() - last_sent > 1.0
-                if frame is None or (seq == last_seq and not stale):
+                # every second so the browser does not think the stream stalled, but only while
+                # the video is recent (a dead emulator must not look alive).
+                stale_gap = time.time() - last_sent > 1.0
+                if not live or (seq == last_seq and not stale_gap):
                     time.sleep(0.02)
                     continue
                 last_seq = seq
@@ -227,8 +284,6 @@ def main():
     if crop and len(crop) != 4:
         sys.exit('--crop necesita 4 números: x,y,ancho,alto')
 
-    subprocess.run([args.adb, 'start-server'], capture_output=True)
-
     mode = args.modo
     if mode == 'video':
         try:
@@ -240,10 +295,22 @@ def main():
         target, fps = video_loop, args.fps
     else:
         target, fps = screenshots_loop, min(args.fps, 4)
+
+    try:
+        subprocess.run([args.adb, 'start-server'], capture_output=True, timeout=20)
+    except Exception:
+        pass
     threading.Thread(target=target, args=(args.adb, args.serial, crop, args.width, fps), daemon=True).start()
 
-    # Only this computer can connect: the video never leaves it.
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
+    # Only this computer can connect: the video never leaves it. If the port is busy (another copy is
+    # running) keep trying, so this copy takes over as soon as the other one closes.
+    server = None
+    while server is None:
+        try:
+            server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
+        except OSError as err:
+            print('Puerto %d ocupado (%s). Reintentando…' % (args.port, err), flush=True)
+            time.sleep(3)
     print('Modo %s. Emulador servido en http://127.0.0.1:%d/video' % (mode, args.port), flush=True)
     print('En HubVision: Cámara WiFi (URL) y pega esa dirección. Cierra esta ventana para detenerlo.', flush=True)
     try:

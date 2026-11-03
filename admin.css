@@ -64,6 +64,14 @@
 /* The URL field only shows when "Cámara WiFi" is chosen (its display rule used to override [hidden]) */
 .ipcam-url[hidden] { display: none; }
 
+/* Message over the video when the camera connection has a problem */
+.stage-empty.alert {
+  background: rgba(6, 9, 15, 0.82);
+  color: #fbbf24;
+  max-width: none;
+  margin: 0;
+}
+
 /* Empty stage */
 .stage-empty {
   font-size: 16px;

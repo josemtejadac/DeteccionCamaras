@@ -666,30 +666,126 @@
     video.srcObject = null;
   }
 
+  // ---------- WiFi camera (MJPEG URL) with diagnosis and automatic reconnection ----------
+  const IPCAM_URL_KEY = 'hubvision.ipcamUrl';
+  const DEFAULT_IPCAM_URL = 'http://127.0.0.1:8090/video'; // tools/iniciar-emulador.bat serves the emulator here
+  let ipcamTarget = '';
+  let ipcamWatch = null;
+  let ipcamProblem = null; // null | 'down' | 'stale' | 'blocked'
+
+  try {
+    ipcamUrlInput.value = localStorage.getItem(IPCAM_URL_KEY) || DEFAULT_IPCAM_URL;
+  } catch {
+    ipcamUrlInput.value = DEFAULT_IPCAM_URL;
+  }
+
+  const IPCAM_MESSAGES = {
+    down:
+      'No llega el video de la cámara. HubVision se reconecta solo apenas vuelva. ' +
+      'Si usas el emulador, abre tools\\iniciar-emulador.bat y deja esa ventana abierta.',
+    stale:
+      'El emulador no está mostrando video nuevo. Abre la cámara de Maxi-Cosi en vivo; HubVision sigue solo.',
+    blocked:
+      'No se pudo cargar el video. Revisa la dirección y que la cámara permita acceso desde el navegador (CORS).',
+  };
+
+  function setIpcamProblem(kind) {
+    if (ipcamProblem === kind) return;
+    ipcamProblem = kind;
+    if (kind) {
+      stageEmpty.hidden = false;
+      stageEmpty.classList.add('alert');
+      stageEmpty.textContent = IPCAM_MESSAGES[kind];
+      activeMedia = null;
+    } else {
+      stageEmpty.hidden = true;
+      stageEmpty.classList.remove('alert');
+    }
+    updateToggleAvailability();
+  }
+
+  function ipcamBase(url) {
+    try {
+      return new URL(url);
+    } catch {
+      return null;
+    }
+  }
+
+  // 'up' (reachable), 'stale' (the local emulator tool answers but has no recent image) or 'down'.
+  async function probeIpcam(url) {
+    const base = ipcamBase(url);
+    if (!base) return 'down';
+    const probeUrl = base.origin + '/frame.jpg?probe=' + Date.now();
+    try {
+      const res = await fetch(probeUrl, { cache: 'no-store' });
+      return res.status === 503 ? 'stale' : 'up';
+    } catch {
+      try {
+        await fetch(probeUrl, { mode: 'no-cors', cache: 'no-store' });
+        return 'up'; // reachable but it does not allow reading (CORS): not a connection problem
+      } catch {
+        return 'down';
+      }
+    }
+  }
+
+  function openIpcam(url, fresh) {
+    const base = ipcamBase(url);
+    const local = base && (base.hostname === '127.0.0.1' || base.hostname === 'localhost');
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      setIpcamProblem(null);
+      activeMedia = 'img';
+      updateToggleAvailability();
+    };
+    img.onerror = async () => {
+      const state = await probeIpcam(url);
+      setIpcamProblem(state === 'up' ? 'blocked' : state);
+    };
+    // A new query string forces a fresh connection when the previous stream died (local tool only).
+    img.src = fresh && local ? url + (url.includes('?') ? '&' : '?') + 't=' + Date.now() : url;
+    img.hidden = false;
+  }
+
+  function startIpcamWatch() {
+    clearInterval(ipcamWatch);
+    ipcamWatch = setInterval(async () => {
+      if (!ipcamTarget) return;
+      const state = await probeIpcam(ipcamTarget);
+      if (state === 'down' || state === 'stale') {
+        setIpcamProblem(state);
+      } else if (ipcamProblem === 'down' || ipcamProblem === 'stale') {
+        openIpcam(ipcamTarget, true); // it is back: reconnect without any click
+      }
+    }, 3000);
+  }
+
   connectIpcamBtn.addEventListener('click', () => {
     const url = ipcamUrlInput.value.trim();
     if (!url) return;
     stopDetection();
     stopWebcam();
     video.hidden = true;
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      stageEmpty.hidden = true;
-      activeMedia = 'img';
-      updateToggleAvailability();
-    };
-    img.onerror = () => {
-      stageEmpty.hidden = false;
-      stageEmpty.textContent =
-        'No se pudo cargar el stream. Verifica la URL y que la cámara permita acceso desde el navegador (CORS).';
-      activeMedia = null;
-      updateToggleAvailability();
-    };
-    img.src = url;
-    img.hidden = false;
+    ipcamTarget = url;
+    ipcamProblem = null;
+    try {
+      localStorage.setItem(IPCAM_URL_KEY, url);
+    } catch {
+      // storage unavailable: the URL is not remembered
+    }
+    openIpcam(url, false);
+    startIpcamWatch();
   });
 
   function stopIpcam() {
+    clearInterval(ipcamWatch);
+    ipcamWatch = null;
+    ipcamTarget = '';
+    ipcamProblem = null;
+    stageEmpty.classList.remove('alert');
+    img.onload = null;
+    img.onerror = null;
     img.src = '';
     img.hidden = true;
   }
