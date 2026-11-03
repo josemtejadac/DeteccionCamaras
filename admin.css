@@ -1,0 +1,171 @@
+/* Admin panel: guided steps, source pills and the group manager. */
+
+.steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px 6px 8px;
+}
+
+.step span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+/* Source selector as pills (the radio itself is hidden) */
+.source-select { flex-wrap: wrap; gap: 8px; }
+
+.source-select label {
+  position: relative;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13.5px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.source-select label:hover { border-color: var(--accent); }
+
+.source-select label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.source-select label.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.16);
+  font-weight: 600;
+}
+
+/* The URL field only shows when "Cámara WiFi" is chosen (its display rule used to override [hidden]) */
+.ipcam-url[hidden] { display: none; }
+
+/* Empty stage */
+.stage-empty {
+  font-size: 16px;
+  line-height: 1.5;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+/* Group manager */
+.group-bar {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+
+.group-bar-title { font-size: 15px; font-weight: 700; }
+
+.group-bar-help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 4px 0 12px;
+}
+
+.group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.group-chips:empty::before {
+  content: 'Aún no hay grupos. Crea el primero abajo.';
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.chip small { color: var(--muted); font-size: 11.5px; }
+
+.chip.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.18);
+  font-weight: 600;
+}
+
+.group-new { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.group-new input {
+  flex: 1 1 220px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+
+#addGroupBtn { background: var(--panel); }
+
+.zone-tools { margin-top: 14px; }
+
+button.primary-soft {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* Group headers in the sidebar list */
+.group-header .group-name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+}
+
+.group-header .group-name:focus { outline: 1px solid var(--accent); border-radius: 4px; }
+
+.group-header .group-del {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 6px;
+  font-size: 13px;
+}
+
+.group-header .group-del:hover { color: var(--busy); border-color: transparent; }

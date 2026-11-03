@@ -29,7 +29,9 @@
   const phoneStatus = document.getElementById('phoneStatus');
   const qrBox = document.getElementById('qrcode');
   const startScreenBtn = document.getElementById('startScreenBtn');
-  const groupInput = document.getElementById('groupInput');
+  const groupChipsEl = document.getElementById('groupChips');
+  const newGroupInput = document.getElementById('newGroupInput');
+  const addGroupBtn = document.getElementById('addGroupBtn');
   const groupListEl = document.getElementById('groupList');
   const liveStatusEl = document.getElementById('liveStatus');
   const pubFreeEl = document.getElementById('pubFree');
@@ -94,6 +96,29 @@
   let viewerLastMsg = 0;
   let demoTimer = null;
 
+  // Groups: a group is a table or sector holding several seats. Empty groups are kept here so they
+  // show up as chips before any seat is drawn; groups with seats also live in each zone's `group`.
+  const GROUPS_KEY = 'hubvision.groups.v1';
+  let customGroups = loadGroups();
+  let activeGroup = '';
+
+  function loadGroups() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(GROUPS_KEY));
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveGroups() {
+    try {
+      localStorage.setItem(GROUPS_KEY, JSON.stringify(customGroups));
+    } catch {
+      // storage unavailable: groups last until reload
+    }
+  }
+
   function loadZones() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -150,8 +175,10 @@
       renderTableList();
       startLiveHost();
       ensureModel();
-      const source = document.querySelector('input[name="source"]:checked').value;
-      if (source === 'webcam' && !webcamStream) startWebcam();
+      zoneHint.textContent = defaultZoneHint();
+      // No source is preselected: the admin picks one (the webcam prompt used to block the page on load).
+      const checked = document.querySelector('input[name="source"]:checked');
+      if (checked && checked.value === 'webcam' && !webcamStream) startWebcam();
     } else {
       stopDetection();
       stopLiveHost();
@@ -409,11 +436,13 @@
   });
 
   // ---------- Media source ----------
-  sourceRadios.forEach((r) => r.addEventListener('change', onSourceChange));
+  // "click" (not "change") so choosing the already selected source retries it.
+  sourceRadios.forEach((r) => r.addEventListener('click', onSourceChange));
 
   function onSourceChange(e) {
     stopDetection();
     stopPhone();
+    sourceRadios.forEach((r) => r.closest('label').classList.toggle('active', r.checked));
     startScreenBtn.hidden = e.target.value !== 'screen';
     if (e.target.value === 'webcam') {
       ipcamUrlWrap.hidden = true;
@@ -525,7 +554,10 @@
       updateToggleAvailability();
     } catch (err) {
       stageEmpty.hidden = false;
-      stageEmpty.textContent = 'No se pudo acceder a la cámara del dispositivo: ' + err.message;
+      const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+      stageEmpty.textContent = denied
+        ? 'El navegador no permitió usar la webcam. Revisa el permiso de cámara (candado junto a la dirección) o elige otra fuente.'
+        : 'No se pudo acceder a la webcam: ' + err.message;
       activeMedia = null;
       updateToggleAvailability();
     }
@@ -720,10 +752,10 @@
   }
 
   const STATUS_LABELS = {
-    busy: 'Ocupada',
-    grace: 'Ocupada (ausencia temporal)',
+    busy: 'Ocupado',
+    grace: 'Ocupado (ausencia temporal)',
     away: 'Ausente temporal (objetos)',
-    free: 'Vacía',
+    free: 'Libre',
   };
 
   function overlapRatio(box, zone) {
@@ -742,11 +774,14 @@
     isDrawingZone = true;
     addZoneBtn.classList.add('active');
     canvas.classList.add('drawing');
-    zoneHint.textContent = 'Arrastra sobre el video para dibujar el área de la nueva mesa (o toca un punto para una mesa de tamaño estándar).';
+    zoneHint.textContent =
+      'Arrastra sobre el video para dibujar el puesto' +
+      (activeGroup ? ' del grupo ' + activeGroup : '') +
+      ', o toca un punto para uno de tamaño estándar.';
   });
 
   clearZonesBtn.addEventListener('click', () => {
-    if (zones.length && confirm('¿Borrar todas las mesas marcadas?')) {
+    if (zones.length && confirm('¿Borrar todos los puestos marcados?')) {
       zones = [];
       saveZones();
       renderTableList();
@@ -826,8 +861,8 @@
       zones.push({
         id: 'z' + Date.now(),
         n: zoneCounter,
-        name: 'Mesa ' + zoneCounter,
-        group: groupInput.value.trim(),
+        name: 'Puesto ' + (zones.filter((z) => (z.group || '') === activeGroup).length + 1),
+        group: activeGroup,
         x: fx,
         y: fy,
         w: fw,
@@ -850,7 +885,7 @@
     canvas.classList.remove('drawing');
     dragStart = null;
     dragCurrent = null;
-    zoneHint.textContent = 'Arrastra sobre el video para dibujar el área de una mesa.';
+    zoneHint.textContent = defaultZoneHint();
   }
 
   function clamp01(v) {
@@ -932,16 +967,102 @@
   function groupZones() {
     const groups = [];
     zones.forEach((z) => {
-      const name = z.group || 'Sin grupo';
-      let g = groups.find((x) => x.name === name);
+      const key = z.group || '';
+      let g = groups.find((x) => x.key === key);
       if (!g) {
-        g = { name, zones: [] };
+        g = { key, name: key || 'Sin grupo', zones: [] };
         groups.push(g);
       }
       g.zones.push(z);
     });
     return groups;
   }
+
+  // ---------- Group manager (admin) ----------
+  function allGroupNames() {
+    return [...new Set([...customGroups, ...zones.map((z) => z.group).filter(Boolean)])];
+  }
+
+  function defaultZoneHint() {
+    return activeGroup
+      ? 'Grupo activo: ' + activeGroup + '. Pulsa "+ Marcar puesto" y dibuja un puesto sobre el video.'
+      : 'Crea un grupo (o elige uno) y luego dibuja sus puestos sobre el video.';
+  }
+
+  function renderGroupBar() {
+    groupChipsEl.innerHTML = '';
+    allGroupNames().forEach((name) => {
+      const count = zones.filter((z) => z.group === name).length;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (activeGroup === name ? ' active' : '');
+      chip.append(document.createTextNode(name + ' '));
+      const small = document.createElement('small');
+      small.textContent = count + (count === 1 ? ' puesto' : ' puestos');
+      chip.appendChild(small);
+      chip.addEventListener('click', () => {
+        activeGroup = name;
+        zoneHint.textContent = defaultZoneHint();
+        renderGroupBar();
+      });
+      groupChipsEl.appendChild(chip);
+    });
+  }
+
+  function addGroup() {
+    const name = newGroupInput.value.trim();
+    if (!name) {
+      newGroupInput.focus();
+      return;
+    }
+    if (!allGroupNames().includes(name)) {
+      customGroups.push(name);
+      saveGroups();
+    }
+    activeGroup = name;
+    newGroupInput.value = '';
+    zoneHint.textContent = defaultZoneHint();
+    renderGroupBar();
+  }
+
+  function renameGroup(oldKey, rawName) {
+    const newKey = rawName.trim();
+    if (newKey === oldKey) return;
+    zones.forEach((z) => {
+      if ((z.group || '') === oldKey) z.group = newKey;
+    });
+    customGroups = [...new Set(customGroups.map((g) => (g === oldKey ? newKey : g)).filter(Boolean))];
+    if (activeGroup === oldKey) activeGroup = newKey;
+    saveZones();
+    saveGroups();
+    zoneHint.textContent = defaultZoneHint();
+    renderGroupBar();
+    setTimeout(renderTableList, 0);
+  }
+
+  function deleteGroup(key) {
+    const seats = zones.filter((z) => (z.group || '') === key).length;
+    const label = key || 'Sin grupo';
+    const msg = seats
+      ? '¿Eliminar el grupo "' + label + '"? Sus ' + seats + ' puestos pasarán a "Sin grupo".'
+      : '¿Eliminar el grupo "' + label + '"?';
+    if (!confirm(msg)) return;
+    zones.forEach((z) => {
+      if ((z.group || '') === key) z.group = '';
+    });
+    customGroups = customGroups.filter((g) => g !== key);
+    if (activeGroup === key) activeGroup = '';
+    saveZones();
+    saveGroups();
+    zoneHint.textContent = defaultZoneHint();
+    renderGroupBar();
+    renderTableList();
+  }
+
+  addGroupBtn.addEventListener('click', addGroup);
+  newGroupInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addGroup();
+  });
 
   function commitOnEnter(input) {
     input.addEventListener('keydown', (e) => {
@@ -1007,12 +1128,14 @@
       return;
     }
 
+    renderGroupBar();
+
     // Do not wipe an input the admin is typing in; the list refreshes on the next cycle after it loses focus.
     const active = document.activeElement;
     if (active && active.tagName === 'INPUT' && tableList.contains(active)) return;
 
     groupListEl.innerHTML = '';
-    new Set(zones.map((z) => z.group).filter(Boolean)).forEach((g) => {
+    allGroupNames().forEach((g) => {
       const opt = document.createElement('option');
       opt.value = g;
       groupListEl.appendChild(opt);
@@ -1022,7 +1145,7 @@
     if (!zones.length) {
       const li = document.createElement('li');
       li.className = 'empty-list';
-      li.textContent = 'Aún no has marcado ninguna mesa.';
+      li.textContent = 'Aún no has marcado ningún puesto. Crea un grupo y dibuja sus puestos sobre el video.';
       tableList.appendChild(li);
       return;
     }
@@ -1031,12 +1154,26 @@
       const free = g.zones.filter((z) => !z.occupied).length;
       const header = document.createElement('li');
       header.className = 'group-header' + (free === 0 ? ' full' : '');
-      const title = document.createElement('span');
-      title.textContent = g.name;
+
+      const title = document.createElement('input');
+      title.className = 'group-name';
+      title.value = g.key;
+      title.placeholder = 'Sin grupo';
+      title.title = 'Cambia el nombre del grupo';
+      title.addEventListener('change', () => renameGroup(g.key, title.value));
+      commitOnEnter(title);
+
       const count = document.createElement('span');
       count.className = 'group-count';
-      count.textContent = free + ' de ' + g.zones.length + ' disponibles';
-      header.append(title, count);
+      count.textContent = free + ' de ' + g.zones.length + ' libres';
+
+      const del = document.createElement('button');
+      del.className = 'group-del';
+      del.textContent = '✕';
+      del.title = 'Eliminar el grupo';
+      del.addEventListener('click', () => deleteGroup(g.key));
+
+      header.append(title, count, del);
       tableList.appendChild(header);
       g.zones.forEach((zone) => tableList.appendChild(buildZoneRow(zone)));
     });

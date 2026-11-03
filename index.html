@@ -11,6 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/public.css" />
+    <link rel="stylesheet" href="/admin.css" />
   </head>
   <body>
     <header class="topbar">
@@ -118,11 +119,17 @@
 
     <main class="layout">
       <section class="video-panel admin-only">
+        <ol class="steps">
+          <li class="step"><span>1</span>Elige la fuente de video</li>
+          <li class="step"><span>2</span>Crea grupos y marca los puestos</li>
+          <li class="step"><span>3</span>Inicia la detección</li>
+        </ol>
+
         <div class="video-toolbar">
           <div class="source-select">
             <label>
-              <input type="radio" name="source" value="webcam" checked />
-              Cámara del dispositivo
+              <input type="radio" name="source" value="webcam" />
+              Webcam del equipo
             </label>
             <label>
               <input type="radio" name="source" value="ipcam" />
@@ -130,7 +137,7 @@
             </label>
             <label>
               <input type="radio" name="source" value="phone" />
-              Cámara de celular (QR)
+              Celular por QR
             </label>
             <label>
               <input type="radio" name="source" value="screen" />
@@ -149,7 +156,7 @@
           <video id="webcamFeed" autoplay muted playsinline hidden></video>
           <img id="ipcamFeed" alt="Cámara WiFi" hidden />
           <canvas id="overlay"></canvas>
-          <div class="stage-empty" id="stageEmpty">Selecciona una fuente de video para comenzar</div>
+          <div class="stage-empty" id="stageEmpty">Elige una fuente de video arriba para comenzar</div>
           <div class="phone-panel" id="phonePanel" hidden>
             <div class="qr-box" id="qrcode"></div>
             <p id="phoneStatus">Preparando conexión…</p>
@@ -157,19 +164,31 @@
           </div>
         </div>
 
+        <div class="group-bar">
+          <div class="group-bar-title">Grupos de mesas</div>
+          <p class="group-bar-help">
+            Un grupo es una mesa (o un sector) con varios puestos. Crea el grupo, déjalo seleccionado y
+            marca sus puestos sobre el video; el público verá cuántos puestos libres tiene cada grupo.
+          </p>
+          <div class="group-chips" id="groupChips"></div>
+          <div class="group-new">
+            <input type="text" id="newGroupInput" placeholder="Nombre del grupo nuevo (ej. Mesa A)" maxlength="40" />
+            <button id="addGroupBtn">Crear grupo</button>
+          </div>
+        </div>
+
         <div class="zone-tools">
-          <input type="text" id="groupInput" list="groupList" placeholder="Grupo de las nuevas mesas (ej. Mesa A)" />
-          <button id="addZone">+ Marcar mesa</button>
-          <span class="hint" id="zoneHint">Arrastra sobre el video para dibujar el área de una mesa.</span>
-          <button id="clearZones" class="ghost">Borrar todas las mesas</button>
+          <button id="addZone" class="primary-soft">+ Marcar puesto</button>
+          <span class="hint" id="zoneHint">Crea un grupo y luego dibuja sus puestos sobre el video.</span>
+          <button id="clearZones" class="ghost">Borrar todos los puestos</button>
         </div>
       </section>
 
       <aside class="sidebar">
-        <h2>Mesas <span id="tableCount">(0)</span></h2>
+        <h2>Puestos <span id="tableCount">(0)</span></h2>
         <div class="summary">
-          <div class="summary-chip free"><strong id="freeCount">0</strong> vacías</div>
-          <div class="summary-chip busy"><strong id="busyCount">0</strong> ocupadas</div>
+          <div class="summary-chip free"><strong id="freeCount">0</strong> libres</div>
+          <div class="summary-chip busy"><strong id="busyCount">0</strong> ocupados</div>
         </div>
         <ul id="tableList" class="table-list"></ul>
         <datalist id="groupList"></datalist>
