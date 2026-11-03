@@ -190,12 +190,26 @@ def video_session(adb, serial, crop, width, fps):
         time.sleep(0.3)
 
 
+def origin_allowed(origin):
+    """Only HubVision (and local development) may read the video from a web page."""
+    if origin.startswith('http://127.0.0.1') or origin.startswith('http://localhost'):
+        return True
+    if not origin.startswith('https://'):
+        return False
+    host = origin[len('https://'):].split(':')[0]
+    return host == 'hubprovicamaras.pages.dev' or host.endswith('.hubprovicamaras.pages.dev')
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
     def send_cors(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin and origin_allowed(origin):
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+        # No Access-Control-Allow-Origin for other sites: their pages cannot read the video.
         self.send_header('Access-Control-Allow-Private-Network', 'true')
         self.send_header('Cross-Origin-Resource-Policy', 'cross-origin')
         self.send_header('Cache-Control', 'no-store')
@@ -269,6 +283,28 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+class ExclusiveServer(ThreadingHTTPServer):
+    """On Windows, address reuse lets a second copy bind the same port; refuse that."""
+
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self):
+        import socket
+
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def port_in_use(port):
+    import socket
+
+    with socket.socket() as probe:
+        probe.settimeout(1)
+        return probe.connect_ex(('127.0.0.1', port)) == 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--modo', choices=['video', 'capturas'], default='video')
@@ -302,14 +338,16 @@ def main():
         pass
     threading.Thread(target=target, args=(args.adb, args.serial, crop, args.width, fps), daemon=True).start()
 
-    # Only this computer can connect: the video never leaves it. If the port is busy (another copy is
-    # running) keep trying, so this copy takes over as soon as the other one closes.
+    # Only this computer can connect: the video never leaves it.
     server = None
     while server is None:
         try:
-            server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
+            server = ExclusiveServer(('127.0.0.1', args.port), Handler)
         except OSError as err:
-            print('Puerto %d ocupado (%s). Reintentando…' % (args.port, err), flush=True)
+            if port_in_use(args.port):  # another copy is already serving: nothing to do
+                print('Ya hay una copia en el puerto %d; esta se cierra.' % args.port, flush=True)
+                return
+            print('No se pudo abrir el puerto %d (%s). Reintentando…' % (args.port, err), flush=True)
             time.sleep(3)
     print('Modo %s. Emulador servido en http://127.0.0.1:%d/video' % (mode, args.port), flush=True)
     print('En HubVision: Cámara WiFi (URL) y pega esa dirección. Cierra esta ventana para detenerlo.', flush=True)

@@ -679,7 +679,28 @@
     ipcamUrlInput.value = DEFAULT_IPCAM_URL;
   }
 
+  // The Windows link registered by tools/instalar-conexion.bat: it opens the emulator tool on demand.
+  const LAUNCH_URL = 'hubvision-emulador://iniciar';
+  let lastLaunch = 0;
+  let startWhenReady = false; // "Iniciar detección" was pressed while the video was not there yet
+
+  function isLocalHelper(url) {
+    const base = ipcamBase(url);
+    return !!base && base.hostname === '127.0.0.1' && base.port === '8090';
+  }
+
+  function launchEmulatorTool() {
+    if (Date.now() - lastLaunch < 15000) return;
+    lastLaunch = Date.now();
+    const link = document.createElement('a');
+    link.href = LAUNCH_URL;
+    link.click();
+  }
+
   const IPCAM_MESSAGES = {
+    starting:
+      'Abriendo el programa del emulador… Si el navegador pregunta si permite abrirlo, acepta y marca recordar. ' +
+      'Si nunca se abre, ejecuta una vez tools\\instalar-conexion.bat.',
     down:
       'No llega el video de la cámara. HubVision se reconecta solo apenas vuelva. ' +
       'Si usas el emulador, abre tools\\iniciar-emulador.bat y deja esa ventana abierta.',
@@ -738,6 +759,10 @@
       setIpcamProblem(null);
       activeMedia = 'img';
       updateToggleAvailability();
+      if (startWhenReady) {
+        startWhenReady = false;
+        startDetection();
+      }
     };
     img.onerror = async () => {
       const state = await probeIpcam(url);
@@ -753,15 +778,17 @@
     ipcamWatch = setInterval(async () => {
       if (!ipcamTarget) return;
       const state = await probeIpcam(ipcamTarget);
-      if (state === 'down' || state === 'stale') {
+      if (state === 'down' && Date.now() - lastLaunch < 15000 && isLocalHelper(ipcamTarget)) {
+        setIpcamProblem('starting'); // just asked Windows to open the tool: give it a moment
+      } else if (state === 'down' || state === 'stale') {
         setIpcamProblem(state);
-      } else if (ipcamProblem === 'down' || ipcamProblem === 'stale') {
+      } else if (ipcamProblem === 'down' || ipcamProblem === 'stale' || ipcamProblem === 'starting') {
         openIpcam(ipcamTarget, true); // it is back: reconnect without any click
       }
     }, 3000);
   }
 
-  connectIpcamBtn.addEventListener('click', () => {
+  connectIpcamBtn.addEventListener('click', async () => {
     const url = ipcamUrlInput.value.trim();
     if (!url) return;
     stopDetection();
@@ -774,8 +801,11 @@
     } catch {
       // storage unavailable: the URL is not remembered
     }
+    // If the emulator tool is not running, ask Windows to open it (the click is the user's permission).
+    if (isLocalHelper(url) && (await probeIpcam(url)) === 'down') launchEmulatorTool();
     openIpcam(url, false);
     startIpcamWatch();
+    updateToggleAvailability();
   });
 
   function stopIpcam() {
@@ -791,13 +821,24 @@
   }
 
   function updateToggleAvailability() {
-    toggleDetectionBtn.disabled = !(model && activeMedia);
+    // With a WiFi camera selected the button stays usable even if the video is not there yet:
+    // pressing it opens the emulator tool and starts detecting as soon as the video arrives.
+    toggleDetectionBtn.disabled = !(model && (activeMedia || ipcamTarget));
   }
 
   // ---------- Detection ----------
   toggleDetectionBtn.addEventListener('click', () => {
-    if (detecting) stopDetection();
-    else startDetection();
+    if (detecting || startWhenReady) {
+      startWhenReady = false;
+      stopDetection();
+    } else if (!activeMedia && ipcamTarget) {
+      startWhenReady = true;
+      toggleDetectionBtn.textContent = 'Esperando el video… (cancelar)';
+      if (isLocalHelper(ipcamTarget)) launchEmulatorTool();
+      setIpcamProblem(isLocalHelper(ipcamTarget) ? 'starting' : 'down');
+    } else {
+      startDetection();
+    }
   });
 
   function startDetection() {
