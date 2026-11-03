@@ -7,6 +7,10 @@
     <meta name="theme-color" content="#06090f" />
     <title>HubVision — Disponibilidad de mesas en tiempo real</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/public.css" />
   </head>
   <body>
     <header class="topbar">
@@ -32,6 +36,85 @@
         </div>
       </form>
     </dialog>
+
+    <section class="public-view" id="publicView">
+      <header class="pv-hero">
+        <div class="pv-live" id="liveStatus">Conectando con el monitoreo…</div>
+        <h1>Cowork Hub Providencia</h1>
+        <p class="pv-sub">Disponibilidad de puestos en tiempo real</p>
+        <div class="pv-open" id="pubOpen"></div>
+      </header>
+
+      <div class="pv-inner">
+        <div class="pv-meter-card">
+          <div class="pv-big"><span id="pubFree">0</span><span class="pv-of">/ <span id="pubTotal">0</span></span></div>
+          <div class="pv-label" id="pubLabel">puestos disponibles</div>
+          <div class="pv-bar"><div class="pv-bar-fill" id="pubBar"></div></div>
+          <div class="pv-updated" id="pubUpdated"></div>
+        </div>
+
+        <div class="pv-legend">
+          <span><i class="dot free"></i>Libre</span>
+          <span><i class="dot busy"></i>Ocupado</span>
+          <span><i class="dot away"></i>Ausente temporal</span>
+        </div>
+
+        <div class="pv-groups" id="pubGroups"></div>
+
+        <h2 class="pv-h2">Visítanos</h2>
+        <div class="pv-info">
+          <div class="pv-info-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
+            <h3>Dirección</h3>
+            <p>Los Jesuitas 881, Providencia, Santiago.</p>
+            <a class="pv-link" href="https://www.google.com/maps/search/?api=1&amp;query=Los+Jesuitas+881+Providencia+Santiago+Chile" target="_blank" rel="noopener">Cómo llegar</a>
+          </div>
+          <div class="pv-info-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <h3>Horario</h3>
+            <p>Lunes a jueves: 8:30 a 18:00 h<br />Viernes: 8:30 a 17:00 h</p>
+            <p class="pv-note">Funciona sin reserva previa.</p>
+          </div>
+          <div class="pv-info-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 5a3.5 3.5 0 0 1 0 6.5M18 14.8c2 .7 3.2 2.4 3.5 5.2"/></svg>
+            <h3>Uso libre y gratuito</h3>
+            <p>Espacio municipal para público general, con capacidad para unas 200 personas.</p>
+          </div>
+        </div>
+
+        <div class="pv-services">
+          <span>Wifi gratuito</span>
+          <span>Talleres y workshops</span>
+          <span>Salas de reuniones privadas</span>
+          <span>Bicicletero</span>
+          <span>Zonas de descanso e infantil</span>
+          <span>Petfriendly</span>
+        </div>
+
+        <p class="pv-foot">HubVision estima la ocupación con visión artificial. No se transmiten ni se guardan imágenes: solo el estado de cada puesto.</p>
+      </div>
+
+      <footer class="pv-footer">
+        <div class="pv-footer-inner">
+          <div>
+            <div class="pv-f-title">Hub Providencia</div>
+            <p>Disponibilidad calculada por HubVision, prototipo de Workspace Analytics, Universidad Mayor. Este no es un sitio oficial del Hub ni de la Municipalidad de Providencia.</p>
+          </div>
+          <div>
+            <h4>Contacto</h4>
+            <p>+562 2654 3200</p>
+            <p>Av. Pedro de Valdivia 963, Providencia, Santiago, Chile</p>
+            <p class="pv-f-note">Datos de la Municipalidad de Providencia.</p>
+          </div>
+          <div>
+            <h4>Más información</h4>
+            <a href="https://providencia.cl/provi/site/artic/20191001/pags/20191001171155.html" target="_blank" rel="noopener">Sitio oficial del Hub Providencia</a>
+            <a href="https://www.google.com/maps/search/?api=1&amp;query=Los+Jesuitas+881+Providencia+Santiago+Chile" target="_blank" rel="noopener">Cómo llegar</a>
+          </div>
+        </div>
+        <p class="pv-f-credit">Foto: Hub Providencia (providencia.cl).</p>
+      </footer>
+    </section>
 
     <main class="layout">
       <section class="video-panel admin-only">
@@ -75,6 +158,7 @@
         </div>
 
         <div class="zone-tools">
+          <input type="text" id="groupInput" list="groupList" placeholder="Grupo de las nuevas mesas (ej. Mesa A)" />
           <button id="addZone">+ Marcar mesa</button>
           <span class="hint" id="zoneHint">Arrastra sobre el video para dibujar el área de una mesa.</span>
           <button id="clearZones" class="ghost">Borrar todas las mesas</button>
@@ -88,9 +172,10 @@
           <div class="summary-chip busy"><strong id="busyCount">0</strong> ocupadas</div>
         </div>
         <ul id="tableList" class="table-list"></ul>
+        <datalist id="groupList"></datalist>
         <p class="footnote">
-          La detección corre 100% en tu navegador (TensorFlow.js). No se envía video
-          ni datos a ningún servidor ni base de datos.
+          La detección corre en el navegador del administrador (TensorFlow.js). No se envía
+          video a ningún servidor: la vista pública recibe solo el estado de cada mesa.
         </p>
       </aside>
     </main>

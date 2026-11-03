@@ -1,0 +1,336 @@
+/* Public availability view: light, institutional look inspired by the Hub Providencia cowork
+   (teal accents from its photos, wood and orange touches). Admin view keeps the dark theme. */
+
+body:not(.is-admin) {
+  background: #f4f7f8;
+  color: #1c2a31;
+  font-family: 'Raleway', 'Inter', system-ui, sans-serif;
+}
+
+body:not(.is-admin) .topbar {
+  background: #ffffff;
+  border-bottom: 1px solid #dbe7e4;
+}
+
+body:not(.is-admin) .brand { color: #1f3a46; }
+
+body:not(.is-admin) #adminBtn {
+  background: #ffffff;
+  color: #1f3a46;
+  border: 1px solid #c9dad6;
+}
+
+body:not(.is-admin) #adminBtn:hover { border-color: #3b93b4; }
+
+.public-view {
+  --pv-ink: #1c2a31;
+  --pv-deep: #1f3a46;
+  --pv-teal: #3b93b4;
+  --pv-line: #dbe7e4;
+  --pv-muted: #5d7480;
+  --pv-free: #1f9d6b;
+  --pv-busy: #d9534f;
+  --pv-away: #d99a1e;
+  color: var(--pv-ink);
+  padding-bottom: 48px;
+}
+
+/* Hero with the cowork photo */
+.pv-hero {
+  background:
+    linear-gradient(180deg, rgba(28, 28, 28, 0.84), rgba(43, 120, 148, 0.78)),
+    url('/img/cowork.jpg') center / cover no-repeat;
+  color: #ffffff;
+  text-align: center;
+  padding: 40px 16px 110px;
+}
+
+.pv-hero h1 {
+  font-size: clamp(26px, 5vw, 40px);
+  letter-spacing: -0.4px;
+  margin-top: 16px;
+}
+
+.pv-sub { font-size: 15px; opacity: 0.9; margin-top: 6px; }
+
+.pv-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 6px 14px;
+}
+
+.pv-live::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fbbf24;
+}
+
+.pv-live.ok::before {
+  background: #4ade80;
+  animation: pv-pulse 1.8s ease-out infinite;
+}
+
+@keyframes pv-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+  100% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-live.ok::before { animation: none; }
+  .pv-bar-fill, .pv-card { transition: none; }
+}
+
+.pv-open {
+  display: inline-block;
+  margin-top: 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--pv-deep);
+}
+
+.pv-open.is-open { color: #146c43; }
+.pv-open.is-closed { color: #9a3412; }
+
+.pv-inner {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* Meter card overlapping the hero */
+.pv-meter-card {
+  position: relative;
+  margin-top: -78px;
+  background: #ffffff;
+  border: 1px solid var(--pv-line);
+  border-radius: 24px;
+  box-shadow: 0 18px 40px rgba(28, 42, 49, 0.16);
+  padding: 26px 20px 22px;
+  text-align: center;
+}
+
+.pv-big {
+  font-size: clamp(68px, 15vw, 112px);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--pv-free);
+}
+
+.pv-big.low { color: var(--pv-busy); }
+
+.pv-of {
+  font-size: 0.36em;
+  font-weight: 600;
+  color: var(--pv-muted);
+  margin-left: 6px;
+}
+
+.pv-label { font-size: 16px; font-weight: 600; margin-top: 6px; }
+
+.pv-bar {
+  max-width: 420px;
+  height: 12px;
+  margin: 18px auto 0;
+  border-radius: 999px;
+  background: #e4edf1;
+  overflow: hidden;
+}
+
+.pv-bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1f9d6b, #34c38f);
+  transition: width 0.6s ease;
+}
+
+.pv-bar-fill.low { background: linear-gradient(90deg, #d9534f, #e8883b); }
+.pv-updated { color: var(--pv-muted); font-size: 12.5px; margin-top: 12px; min-height: 16px; }
+
+/* Legend */
+.pv-legend {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 22px 0 4px;
+  font-size: 13px;
+  color: var(--pv-muted);
+}
+
+.pv-legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+.public-view .dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--pv-free);
+}
+
+.public-view .dot.busy { background: var(--pv-busy); }
+.public-view .dot.away { background: var(--pv-away); }
+
+/* Groups */
+.pv-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pv-card {
+  background: #ffffff;
+  border: 1px solid var(--pv-line);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 4px 14px rgba(28, 42, 49, 0.06);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pv-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(28, 42, 49, 0.12); }
+
+.pv-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.pv-card-head h3 { font-size: 16px; color: var(--pv-deep); }
+
+.pv-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 11px;
+  border-radius: 999px;
+  color: #146c43;
+  background: #e2f5ec;
+  white-space: nowrap;
+}
+
+.pv-badge.full { color: #a02622; background: #fbe6e5; }
+
+.pv-seats { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pv-seat {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 11px;
+  border-radius: 12px;
+  border: 1px solid;
+}
+
+.pv-seat.free { background: #e8f6f0; border-color: #b8e2d0; color: #14573d; }
+.pv-seat.busy { background: #fdeeed; border-color: #f3c6c4; color: #8a2a27; }
+.pv-seat.away { background: #fdf4e0; border-color: #efd9a1; color: #7a5410; }
+
+.pv-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--pv-muted);
+  padding: 38px 12px;
+  background: #ffffff;
+  border: 1px dashed #b9cfca;
+  border-radius: 20px;
+}
+
+/* Visit info */
+.pv-h2 { font-size: 20px; color: var(--pv-deep); margin: 40px 0 14px; }
+
+.pv-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.pv-info-card {
+  background: #ffffff;
+  border: 1px solid var(--pv-line);
+  border-radius: 20px;
+  padding: 18px;
+}
+
+.pv-info-card svg { width: 26px; height: 26px; color: var(--pv-teal); margin-bottom: 8px; }
+.pv-info-card h3 { font-size: 15px; color: var(--pv-deep); margin-bottom: 6px; }
+.pv-info-card p { font-size: 14px; line-height: 1.55; }
+.pv-note { color: var(--pv-muted); font-size: 12.5px !important; margin-top: 6px; }
+
+.pv-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--pv-teal);
+  padding: 8px 16px;
+  border-radius: 999px;
+  text-decoration: none;
+}
+
+.pv-link:hover { background: var(--pv-deep); }
+
+.pv-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.pv-services span {
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: #e4edf1;
+  color: var(--pv-deep);
+  font-weight: 600;
+}
+
+.pv-foot {
+  text-align: center;
+  color: var(--pv-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 34px;
+}
+
+.pv-foot a { color: var(--pv-teal); }
+
+/* Footer in the style of the municipal site: charcoal background, steel-blue headings */
+.pv-footer {
+  background: #1c1c1c;
+  color: #ffffff;
+  margin-top: 40px;
+  padding: 36px 16px 22px;
+}
+
+.pv-footer-inner {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 28px;
+}
+
+.pv-f-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+.pv-footer h4 { color: #3b93b4; font-size: 16px; margin-bottom: 10px; }
+.pv-footer p { font-size: 14px; line-height: 1.6; margin-bottom: 6px; color: #e8eef1; }
+.pv-footer .pv-f-note { font-size: 12px; color: #9fb0b8; }
+.pv-footer a { display: block; color: #ffffff; font-size: 14px; margin-bottom: 8px; text-decoration: underline; text-decoration-color: #3b93b4; text-underline-offset: 4px; }
+.pv-footer a:hover { color: #3b93b4; }
+.pv-f-credit { max-width: 1000px; margin: 24px auto 0 !important; font-size: 12px !important; color: #9fb0b8 !important; }

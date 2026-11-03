@@ -29,6 +29,16 @@
   const phoneStatus = document.getElementById('phoneStatus');
   const qrBox = document.getElementById('qrcode');
   const startScreenBtn = document.getElementById('startScreenBtn');
+  const groupInput = document.getElementById('groupInput');
+  const groupListEl = document.getElementById('groupList');
+  const liveStatusEl = document.getElementById('liveStatus');
+  const pubFreeEl = document.getElementById('pubFree');
+  const pubTotalEl = document.getElementById('pubTotal');
+  const pubLabelEl = document.getElementById('pubLabel');
+  const pubBarEl = document.getElementById('pubBar');
+  const pubUpdatedEl = document.getElementById('pubUpdated');
+  const pubGroupsEl = document.getElementById('pubGroups');
+  const pubOpenEl = document.getElementById('pubOpen');
   const adminBtn = document.getElementById('adminBtn');
   const loginDialog = document.getElementById('loginDialog');
   const loginForm = document.getElementById('loginForm');
@@ -72,6 +82,18 @@
   let phonePeer = null;
   let phoneCall = null;
 
+  // Live sharing: the admin browser hosts a fixed PeerJS id and pushes table states to public viewers.
+  const LIVE_PEER_ID = 'hubvision-live-7f3a9c2e';
+  let livePeer = null;
+  let liveConns = [];
+  let liveHeartbeat = null;
+  let liveLastSent = '';
+  let viewerConn = null;
+  let viewerRetry = null;
+  let viewerStaleTimer = null;
+  let viewerLastMsg = 0;
+  let demoTimer = null;
+
   function loadZones() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -83,7 +105,7 @@
   }
 
   function saveZones() {
-    const persistent = zones.map(({ id, n, name, x, y, w, h }) => ({ id, n, name, x, y, w, h }));
+    const persistent = zones.map(({ id, n, name, group, x, y, w, h }) => ({ id, n, name, group, x, y, w, h }));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persistent));
   }
 
@@ -120,19 +142,235 @@
     const admin = isAdmin();
     document.body.classList.toggle('is-admin', admin);
     adminBtn.textContent = admin ? 'Cerrar sesión' : 'Admin';
-    renderTableList();
     if (admin) {
+      clearInterval(demoTimer);
+      stopLiveViewer();
+      zones = loadZones();
+      zoneCounter = zones.reduce((max, z) => Math.max(max, z.n || 0), 0);
+      renderTableList();
+      startLiveHost();
       ensureModel();
       const source = document.querySelector('input[name="source"]:checked').value;
       if (source === 'webcam' && !webcamStream) startWebcam();
     } else {
       stopDetection();
+      stopLiveHost();
       stopWebcam();
       stopPhone();
       stopIpcam();
       activeMedia = null;
       updateToggleAvailability();
+      // The public view shows what the admin session publishes, never this browser's saved tables.
+      zones = [];
+      renderTableList();
+      if (urlParams.has('demo')) startDemo();
+      else startLiveViewer();
     }
+  }
+
+  // ?demo=1 fills the public view with sample groups that change over time, to preview the design.
+  function startDemo() {
+    clearInterval(demoTimer);
+    const sample = [['Mesa A', 4], ['Mesa B', 6], ['Mesa C', 4], ['Zona ventanal', 5]];
+    zones = [];
+    sample.forEach(([group, count]) => {
+      for (let i = 1; i <= count; i++) {
+        const busy = Math.random() < 0.55;
+        zones.push({ id: 'demo' + zones.length, name: 'Puesto ' + i, group, status: busy ? 'busy' : 'free', occupied: busy });
+      }
+    });
+    viewerLastMsg = Date.now();
+    setLiveStatus('Demostración con datos de ejemplo', true);
+    pubUpdatedEl.textContent = 'Datos de ejemplo';
+    renderTableList();
+    demoTimer = setInterval(() => {
+      if (isAdmin()) return;
+      const z = zones[Math.floor(Math.random() * zones.length)];
+      z.occupied = !z.occupied;
+      z.status = z.occupied ? 'busy' : 'free';
+      renderTableList();
+    }, 3000);
+  }
+
+  // Hub Providencia cowork hours: Monday to Thursday 08:30-18:00, Friday until 17:00, closed on weekends.
+  const OPEN_HOURS = { Mon: [510, 1080], Tue: [510, 1080], Wed: [510, 1080], Thu: [510, 1080], Fri: [510, 1020] };
+  const DAY_ORDER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const DAY_ES = { Mon: 'lunes', Tue: 'martes', Wed: 'miércoles', Thu: 'jueves', Fri: 'viernes', Sat: 'sábado', Sun: 'domingo' };
+
+  function fmtTime(min) {
+    return Math.floor(min / 60) + ':' + String(min % 60).padStart(2, '0');
+  }
+
+  function hubOpenStatus() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Santiago',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date());
+    const get = (type) => parts.find((p) => p.type === type).value;
+    const day = get('weekday');
+    const minutes = (parseInt(get('hour'), 10) % 24) * 60 + parseInt(get('minute'), 10);
+    const today = OPEN_HOURS[day];
+    if (today && minutes >= today[0] && minutes < today[1]) {
+      return { open: true, text: 'Abierto ahora · cierra a las ' + fmtTime(today[1]) };
+    }
+    if (today && minutes < today[0]) {
+      return { open: false, text: 'Cerrado · abre hoy a las ' + fmtTime(today[0]) };
+    }
+    const index = DAY_ORDER.indexOf(day);
+    for (let step = 1; step <= 7; step++) {
+      const next = DAY_ORDER[(index + step) % 7];
+      if (OPEN_HOURS[next]) {
+        const when = step === 1 ? 'mañana' : 'el ' + DAY_ES[next];
+        return { open: false, text: 'Cerrado · abre ' + when + ' a las ' + fmtTime(OPEN_HOURS[next][0]) };
+      }
+    }
+    return { open: false, text: 'Cerrado' };
+  }
+
+  function renderOpenStatus() {
+    const status = hubOpenStatus();
+    pubOpenEl.textContent = status.text;
+    pubOpenEl.classList.toggle('is-open', status.open);
+    pubOpenEl.classList.toggle('is-closed', !status.open);
+  }
+  setInterval(renderOpenStatus, 60000);
+
+  // ---------- Live sharing between admin and public view (WebRTC data channel via PeerJS) ----------
+  function liveSnapshot() {
+    return {
+      type: 'state',
+      ts: Date.now(),
+      detecting,
+      zones: zones.map((z) => ({ id: z.id, name: z.name, group: z.group || '', status: z.status || 'free', occupied: !!z.occupied })),
+    };
+  }
+
+  function broadcastLive(force) {
+    if (!livePeer || !liveConns.length) return;
+    const snap = liveSnapshot();
+    const key = JSON.stringify([snap.detecting, snap.zones]);
+    if (!force && key === liveLastSent) return;
+    liveLastSent = key;
+    liveConns.forEach((c) => {
+      if (c.open) c.send(snap);
+    });
+  }
+
+  function startLiveHost() {
+    if (typeof Peer === 'undefined' || livePeer) return;
+    const peer = new Peer(LIVE_PEER_ID);
+    livePeer = peer;
+    peer.on('connection', (conn) => {
+      const drop = () => {
+        liveConns = liveConns.filter((c) => c !== conn);
+      };
+      conn.on('open', () => {
+        liveConns.push(conn);
+        conn.send(liveSnapshot());
+      });
+      conn.on('close', drop);
+      conn.on('error', drop);
+    });
+    peer.on('disconnected', () => {
+      if (!peer.destroyed) peer.reconnect();
+    });
+    peer.on('error', () => {
+      // The id may still be held by a previous tab, or the signaling server was unreachable: retry shortly.
+      stopLiveHost();
+      setTimeout(() => {
+        if (isAdmin()) startLiveHost();
+      }, 5000);
+    });
+    liveHeartbeat = setInterval(() => broadcastLive(true), 5000);
+  }
+
+  function stopLiveHost() {
+    clearInterval(liveHeartbeat);
+    liveHeartbeat = null;
+    liveConns.forEach((c) => c.close());
+    liveConns = [];
+    if (livePeer) {
+      livePeer.destroy();
+      livePeer = null;
+    }
+  }
+
+  function setLiveStatus(text, ok) {
+    liveStatusEl.hidden = false;
+    liveStatusEl.textContent = text;
+    liveStatusEl.classList.toggle('ok', !!ok);
+  }
+
+  function startLiveViewer() {
+    if (typeof Peer === 'undefined' || livePeer) return;
+    setLiveStatus('Conectando con el monitoreo…');
+    const peer = new Peer();
+    livePeer = peer;
+    peer.on('open', connectToHost);
+    peer.on('disconnected', () => {
+      if (!peer.destroyed) peer.reconnect();
+    });
+    peer.on('error', (err) => {
+      if (err.type === 'peer-unavailable') {
+        setLiveStatus('El monitoreo no está activo en este momento. Reintentando…');
+        scheduleViewerRetry();
+      } else {
+        stopLiveViewer();
+        setLiveStatus('Sin conexión. Reintentando…');
+        setTimeout(() => {
+          if (!isAdmin()) startLiveViewer();
+        }, 5000);
+      }
+    });
+    viewerStaleTimer = setInterval(() => {
+      if (!viewerLastMsg) return;
+      const secs = Math.floor((Date.now() - viewerLastMsg) / 1000);
+      pubUpdatedEl.textContent = secs < 5 ? 'Actualizado ahora' : 'Actualizado hace ' + secs + ' s';
+      if (secs > 15) setLiveStatus('Sin señal del monitoreo. Los datos pueden estar desactualizados.', false);
+    }, 1000);
+  }
+
+  function connectToHost() {
+    if (!livePeer || livePeer.destroyed || isAdmin()) return;
+    if (viewerConn) viewerConn.close();
+    const conn = livePeer.connect(LIVE_PEER_ID, { reliable: true });
+    viewerConn = conn;
+    conn.on('data', (msg) => {
+      if (!msg || msg.type !== 'state' || !Array.isArray(msg.zones)) return;
+      viewerLastMsg = Date.now();
+      zones = msg.zones.map((z) => ({ ...z }));
+      setLiveStatus(msg.detecting ? 'En vivo' : 'Monitoreo en pausa: últimos datos recibidos', msg.detecting);
+      renderTableList();
+    });
+    conn.on('close', () => {
+      setLiveStatus('Se perdió la conexión con el monitoreo. Reintentando…');
+      scheduleViewerRetry();
+    });
+  }
+
+  function scheduleViewerRetry() {
+    clearTimeout(viewerRetry);
+    viewerRetry = setTimeout(() => {
+      if (!isAdmin() && livePeer && !livePeer.destroyed) connectToHost();
+    }, 5000);
+  }
+
+  function stopLiveViewer() {
+    clearTimeout(viewerRetry);
+    clearInterval(viewerStaleTimer);
+    viewerLastMsg = 0;
+    if (viewerConn) {
+      viewerConn.close();
+      viewerConn = null;
+    }
+    if (livePeer && !liveConns.length && !liveHeartbeat) {
+      livePeer.destroy();
+      livePeer = null;
+    }
+    liveStatusEl.hidden = true;
   }
 
   adminBtn.addEventListener('click', () => {
@@ -386,6 +624,7 @@
     toggleDetectionBtn.textContent = 'Detener detección';
     detectionTimer = setInterval(runDetection, 700);
     runDetection();
+    broadcastLive(true);
   }
 
   function stopDetection() {
@@ -393,6 +632,7 @@
     toggleDetectionBtn.textContent = 'Iniciar detección';
     if (detectionTimer) clearInterval(detectionTimer);
     detectionTimer = null;
+    broadcastLive(true);
   }
 
   function getMediaEl() {
@@ -587,6 +827,7 @@
         id: 'z' + Date.now(),
         n: zoneCounter,
         name: 'Mesa ' + zoneCounter,
+        group: groupInput.value.trim(),
         x: fx,
         y: fy,
         w: fw,
@@ -686,52 +927,175 @@
   }
   requestAnimationFrame(draw);
 
+  const PUBLIC_LABELS = { busy: 'Ocupado', grace: 'Ocupado', away: 'Ausente temporal', free: 'Libre' };
+
+  function groupZones() {
+    const groups = [];
+    zones.forEach((z) => {
+      const name = z.group || 'Sin grupo';
+      let g = groups.find((x) => x.name === name);
+      if (!g) {
+        g = { name, zones: [] };
+        groups.push(g);
+      }
+      g.zones.push(z);
+    });
+    return groups;
+  }
+
+  function commitOnEnter(input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') input.blur();
+    });
+  }
+
+  function buildZoneRow(zone) {
+    const li = document.createElement('li');
+    li.className = 'table-row' + (zone.status === 'away' ? ' away' : zone.occupied ? ' busy' : '');
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+
+    const nameInput = document.createElement('input');
+    nameInput.className = 'name';
+    nameInput.value = zone.name;
+    nameInput.addEventListener('change', () => {
+      zone.name = nameInput.value.trim() || zone.name;
+      saveZones();
+      setTimeout(renderTableList, 0);
+    });
+    commitOnEnter(nameInput);
+
+    const groupField = document.createElement('input');
+    groupField.className = 'group';
+    groupField.setAttribute('list', 'groupList');
+    groupField.placeholder = 'Grupo';
+    groupField.value = zone.group || '';
+    groupField.addEventListener('change', () => {
+      zone.group = groupField.value.trim();
+      saveZones();
+      setTimeout(renderTableList, 0);
+    });
+    commitOnEnter(groupField);
+
+    const state = document.createElement('span');
+    state.className = 'state';
+    state.textContent = STATUS_LABELS[zone.status || 'free'];
+
+    const remove = document.createElement('button');
+    remove.className = 'remove';
+    remove.textContent = '✕';
+    remove.addEventListener('click', () => {
+      zones = zones.filter((z) => z.id !== zone.id);
+      saveZones();
+      renderTableList();
+    });
+
+    li.append(dot, nameInput, groupField, state, remove);
+    return li;
+  }
+
   function renderTableList() {
     tableCountEl.textContent = '(' + zones.length + ')';
     const busy = zones.filter((z) => z.occupied).length;
     freeCountEl.textContent = zones.length - busy;
     busyCountEl.textContent = busy;
+    broadcastLive();
+
+    if (!isAdmin()) {
+      renderPublic();
+      return;
+    }
+
+    // Do not wipe an input the admin is typing in; the list refreshes on the next cycle after it loses focus.
+    const active = document.activeElement;
+    if (active && active.tagName === 'INPUT' && tableList.contains(active)) return;
+
+    groupListEl.innerHTML = '';
+    new Set(zones.map((z) => z.group).filter(Boolean)).forEach((g) => {
+      const opt = document.createElement('option');
+      opt.value = g;
+      groupListEl.appendChild(opt);
+    });
 
     tableList.innerHTML = '';
     if (!zones.length) {
       const li = document.createElement('li');
       li.className = 'empty-list';
-      li.textContent = isAdmin() ? 'Aún no has marcado ninguna mesa.' : 'Aún no hay mesas para mostrar.';
+      li.textContent = 'Aún no has marcado ninguna mesa.';
       tableList.appendChild(li);
       return;
     }
 
-    zones.forEach((zone) => {
-      const li = document.createElement('li');
-      li.className = 'table-row' + (zone.status === 'away' ? ' away' : zone.occupied ? ' busy' : '');
+    groupZones().forEach((g) => {
+      const free = g.zones.filter((z) => !z.occupied).length;
+      const header = document.createElement('li');
+      header.className = 'group-header' + (free === 0 ? ' full' : '');
+      const title = document.createElement('span');
+      title.textContent = g.name;
+      const count = document.createElement('span');
+      count.className = 'group-count';
+      count.textContent = free + ' de ' + g.zones.length + ' disponibles';
+      header.append(title, count);
+      tableList.appendChild(header);
+      g.zones.forEach((zone) => tableList.appendChild(buildZoneRow(zone)));
+    });
+  }
 
-      const dot = document.createElement('span');
-      dot.className = 'dot';
+  function renderPublic() {
+    renderOpenStatus();
+    const total = zones.length;
+    const free = zones.filter((z) => !z.occupied).length;
+    const pct = total ? Math.round((free / total) * 100) : 0;
+    const low = total > 0 && pct < 25;
 
-      const nameInput = document.createElement('input');
-      nameInput.className = 'name';
-      nameInput.value = zone.name;
-      nameInput.readOnly = !isAdmin();
-      nameInput.addEventListener('change', () => {
-        zone.name = nameInput.value.trim() || zone.name;
-        saveZones();
+    pubFreeEl.textContent = free;
+    pubTotalEl.textContent = total;
+    pubLabelEl.textContent = total === 0 ? 'esperando datos del monitoreo' : free === 1 ? 'puesto disponible' : 'puestos disponibles';
+    pubBarEl.style.width = pct + '%';
+    pubBarEl.classList.toggle('low', low);
+    pubFreeEl.parentElement.classList.toggle('low', low);
+
+    pubGroupsEl.innerHTML = '';
+    if (!total) {
+      const empty = document.createElement('div');
+      empty.className = 'pv-empty';
+      empty.textContent = viewerLastMsg
+        ? 'Aún no hay mesas configuradas.'
+        : 'Aún no hay datos. Aparecerán apenas el monitoreo esté activo.';
+      pubGroupsEl.appendChild(empty);
+      return;
+    }
+
+    groupZones().forEach((g) => {
+      const groupFree = g.zones.filter((z) => !z.occupied).length;
+      const card = document.createElement('article');
+      card.className = 'pv-card';
+
+      const head = document.createElement('div');
+      head.className = 'pv-card-head';
+      const title = document.createElement('h3');
+      title.textContent = g.name;
+      const badge = document.createElement('span');
+      badge.className = 'pv-badge' + (groupFree === 0 ? ' full' : '');
+      badge.textContent = groupFree === 0 ? 'Completo' : groupFree + ' de ' + g.zones.length + ' libres';
+      head.append(title, badge);
+
+      const seats = document.createElement('div');
+      seats.className = 'pv-seats';
+      g.zones.forEach((z) => {
+        const status = z.status === 'away' ? 'away' : z.occupied ? 'busy' : 'free';
+        const seat = document.createElement('span');
+        seat.className = 'pv-seat ' + status;
+        seat.title = PUBLIC_LABELS[z.status || 'free'];
+        const dot = document.createElement('i');
+        dot.className = 'dot ' + status;
+        seat.append(dot, document.createTextNode(z.name));
+        seats.appendChild(seat);
       });
 
-      const state = document.createElement('span');
-      state.className = 'state';
-      state.textContent = STATUS_LABELS[zone.status || 'free'];
-
-      const remove = document.createElement('button');
-      remove.className = 'remove';
-      remove.textContent = '✕';
-      remove.addEventListener('click', () => {
-        zones = zones.filter((z) => z.id !== zone.id);
-        saveZones();
-        renderTableList();
-      });
-
-      li.append(dot, nameInput, state, remove);
-      tableList.appendChild(li);
+      card.append(head, seats);
+      pubGroupsEl.appendChild(card);
     });
   }
 
