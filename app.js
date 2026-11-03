@@ -75,7 +75,6 @@
   let model = null;
   let activeMedia = null; // 'video' | 'img' | null
   let detecting = false;
-  let detectionTimer = null;
   let zones = loadZones();
   let latestPersons = []; // fractional boxes, for on-screen debug only
   let latestMaxScore = 0;
@@ -159,6 +158,15 @@
       } catch (err) {
         console.warn('mobilenet_v2 unavailable, using the default model', err);
         model = await cocoSsd.load();
+      }
+      // The first inference is slow (the GPU programs get compiled): do it now, not when detection starts.
+      try {
+        const warm = document.createElement('canvas');
+        warm.width = 64;
+        warm.height = 64;
+        await model.detect(warm, 1, 0.9);
+      } catch {
+        // warming up is optional
       }
       modelStatus.textContent = 'Modelo listo';
       modelStatus.classList.add('ready');
@@ -841,21 +849,53 @@
     }
   });
 
+  // Detection runs back to back (each pass starts when the previous one ends, with a short pause so the
+  // page stays responsive) instead of on a fixed 0.7 s timer, so it samples as fast as the PC allows.
+  const MIN_DETECT_GAP_MS = 60;
+  let detectLoopRunning = false;
+  let latestDetectMs = 0;
+  let lastRenderSignature = '';
+
   function startDetection() {
     if (!model || !activeMedia) return;
     detecting = true;
     toggleDetectionBtn.textContent = 'Detener detección';
-    detectionTimer = setInterval(runDetection, 700);
-    runDetection();
     broadcastLive(true);
+    if (!detectLoopRunning) detectLoop();
+  }
+
+  async function detectLoop() {
+    detectLoopRunning = true;
+    while (detecting) {
+      const started = performance.now();
+      await runDetection();
+      latestDetectMs = performance.now() - started;
+      await new Promise((resolve) => setTimeout(resolve, Math.max(MIN_DETECT_GAP_MS - latestDetectMs, 0)));
+    }
+    detectLoopRunning = false;
   }
 
   function stopDetection() {
     detecting = false;
     toggleDetectionBtn.textContent = 'Iniciar detección';
-    if (detectionTimer) clearInterval(detectionTimer);
-    detectionTimer = null;
     broadcastLive(true);
+  }
+
+  // tfjs reads an <img> at its on-screen (CSS) size, stretching it to the element's box: that distorts the
+  // picture and shifts every box it returns. Drawing the frame at its own proportions into a canvas (also
+  // scaled down, which is faster and enough for the model) keeps both the image and the coordinates right.
+  const detectCanvas = document.createElement('canvas');
+  const detectCtx = detectCanvas.getContext('2d');
+  const DETECT_MAX_WIDTH = 640;
+
+  function detectionInput(mediaEl, size) {
+    const scale = Math.min(1, DETECT_MAX_WIDTH / size.width);
+    const w = Math.round(size.width * scale);
+    const h = Math.round(size.height * scale);
+    if (detectCanvas.width !== w) detectCanvas.width = w;
+    if (detectCanvas.height !== h) detectCanvas.height = h;
+    detectCtx.drawImage(mediaEl, 0, 0, w, h);
+    return detectCanvas;
   }
 
   function getMediaEl() {
@@ -874,10 +914,12 @@
     if (!mediaEl || !size || !size.width || !size.height) return;
 
     let predictions;
+    let input;
     try {
+      input = detectionInput(mediaEl, size);
       // coco-ssd drops everything below minScore (default 0.5) itself, so ask for low scores
       // and let the sensitivity setting decide what counts.
-      predictions = await model.detect(mediaEl, 20, 0.15);
+      predictions = await model.detect(input, 20, 0.15);
     } catch (err) {
       console.error('Detection error', err);
       stopDetection();
@@ -886,26 +928,35 @@
       return;
     }
 
+    // Boxes come back in the pixels of the canvas the model saw: normalise by that size.
+    const iw = input.width;
+    const ih = input.height;
     latestMaxScore = predictions.reduce((max, p) => (p.class === 'person' ? Math.max(max, p.score) : max), 0);
     latestPersons = predictions
       .filter((p) => p.class === 'person' && p.score >= personMinScore)
       .map((p) => ({
-        x: p.bbox[0] / size.width,
-        y: p.bbox[1] / size.height,
-        w: p.bbox[2] / size.width,
-        h: p.bbox[3] / size.height,
+        x: p.bbox[0] / iw,
+        y: p.bbox[1] / ih,
+        w: p.bbox[2] / iw,
+        h: p.bbox[3] / ih,
       }));
 
     const objects = predictions
       .filter((p) => OBJECT_CLASSES.includes(p.class) && p.score > OBJECT_MIN_SCORE)
       .map((p) => ({
-        cx: (p.bbox[0] + p.bbox[2] / 2) / size.width,
-        cy: (p.bbox[1] + p.bbox[3] / 2) / size.height,
+        cx: (p.bbox[0] + p.bbox[2] / 2) / iw,
+        cy: (p.bbox[1] + p.bbox[3] / 2) / ih,
       }));
 
     const now = Date.now();
     zones.forEach((zone) => updateZoneStatus(zone, objects, now));
-    renderTableList();
+
+    // Rebuilding the list on every pass is wasteful now that passes are frequent: only when a state changed.
+    const signature = zones.map((z) => z.id + ':' + z.status + ':' + z.occupied).join('|');
+    if (signature !== lastRenderSignature) {
+      lastRenderSignature = signature;
+      renderTableList();
+    }
   }
 
   function updateZoneStatus(zone, objects, now) {
@@ -1143,9 +1194,11 @@
       });
 
       // Small readout to tune the sensitivity: the best "person" confidence seen vs. the threshold.
-      const hud = latestMaxScore > 0
-        ? 'Persona: ' + latestMaxScore.toFixed(2) + ' · umbral ' + personMinScore.toFixed(2)
-        : 'Persona: no detectada · umbral ' + personMinScore.toFixed(2);
+      const hud =
+        (latestMaxScore > 0
+          ? 'Persona: ' + latestMaxScore.toFixed(2) + ' · umbral ' + personMinScore.toFixed(2)
+          : 'Persona: no detectada · umbral ' + personMinScore.toFixed(2)) +
+        ' · ' + Math.round(latestDetectMs) + ' ms';
       ctx.font = '12px Inter, sans-serif';
       const hudWidth = ctx.measureText(hud).width + 14;
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
