@@ -178,7 +178,13 @@
     if (e.target.value === 'webcam') {
       ipcamUrlWrap.hidden = true;
       stopIpcam();
+      stopWebcam();
       startWebcam();
+    } else if (e.target.value === 'screen') {
+      ipcamUrlWrap.hidden = true;
+      stopIpcam();
+      stopWebcam();
+      startScreen();
     } else if (e.target.value === 'phone') {
       ipcamUrlWrap.hidden = true;
       stopIpcam();
@@ -280,6 +286,34 @@
     } catch (err) {
       stageEmpty.hidden = false;
       stageEmpty.textContent = 'No se pudo acceder a la cámara del dispositivo: ' + err.message;
+      activeMedia = null;
+      updateToggleAvailability();
+    }
+  }
+
+  // Test source: capture a screen or window where another app (e.g. a camera's own app) shows the video.
+  async function startScreen() {
+    try {
+      webcamStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      webcamStream.getVideoTracks()[0].addEventListener('ended', () => {
+        stopDetection();
+        stopWebcam();
+        video.hidden = true;
+        activeMedia = null;
+        stageEmpty.hidden = false;
+        stageEmpty.textContent = 'Se dejó de compartir la pantalla. Vuelve a elegir "Capturar pantalla" para reanudar.';
+        updateToggleAvailability();
+      });
+      video.srcObject = webcamStream;
+      video.hidden = false;
+      img.hidden = true;
+      stageEmpty.hidden = true;
+      activeMedia = 'video';
+      await video.play();
+      updateToggleAvailability();
+    } catch (err) {
+      stageEmpty.hidden = false;
+      stageEmpty.textContent = 'No se pudo capturar la pantalla: ' + err.message;
       activeMedia = null;
       updateToggleAvailability();
     }
