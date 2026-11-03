@@ -408,6 +408,17 @@ dialog input {
 
 .phone-panel[hidden] { display: none; }
 
+/* The panel ignores clicks so the stage stays usable, but its link and button must work. */
+.phone-panel .phone-link,
+.phone-panel button { pointer-events: auto; }
+
+.phone-link {
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--accent);
+  word-break: break-all;
+}
+
 .qr-box {
   background: #fff;
   padding: 10px;

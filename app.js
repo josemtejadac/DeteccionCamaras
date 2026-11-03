@@ -28,6 +28,8 @@
   const phonePanel = document.getElementById('phonePanel');
   const phoneStatus = document.getElementById('phoneStatus');
   const qrBox = document.getElementById('qrcode');
+  const phoneLink = document.getElementById('phoneLink');
+  const copyPhoneLinkBtn = document.getElementById('copyPhoneLink');
   const startScreenBtn = document.getElementById('startScreenBtn');
   const groupChipsEl = document.getElementById('groupChips');
   const newGroupInput = document.getElementById('newGroupInput');
@@ -494,6 +496,12 @@
       qrBox.innerHTML = '';
       new QRCode(qrBox, { text: link, width: 200, height: 200 });
       phoneStatus.textContent = 'Esperando al celular…';
+      // Fallback when the phone's scanner only reads the code: open or copy the same link.
+      phoneLink.href = link;
+      phoneLink.textContent = link;
+      phoneLink.hidden = false;
+      copyPhoneLinkBtn.hidden = false;
+      copyPhoneLinkBtn.textContent = 'Copiar enlace';
     });
 
     peer.on('call', (call) => {
@@ -527,7 +535,18 @@
     });
   }
 
+  copyPhoneLinkBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(phoneLink.href);
+      copyPhoneLinkBtn.textContent = 'Enlace copiado';
+    } catch {
+      copyPhoneLinkBtn.textContent = 'Copia el enlace a mano';
+    }
+  });
+
   function stopPhone() {
+    phoneLink.hidden = true;
+    copyPhoneLinkBtn.hidden = true;
     if (phoneCall) {
       const call = phoneCall;
       phoneCall = null;
