@@ -97,6 +97,14 @@
 .detect-tools label { font-weight: 600; }
 .detect-tools input[type='range'] { flex: 0 1 220px; accent-color: var(--accent); }
 .detect-tools .sens-value { font-weight: 700; min-width: 40px; }
+.detect-tools select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
 .detect-tools .hint { flex: 1 1 100%; }
 
 /* Group manager */

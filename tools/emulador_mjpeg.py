@@ -32,6 +32,10 @@ from PIL import Image
 IDLE_SECONDS = 10  # stop recording the emulator when nobody has asked for video for this long
 STALE_SECONDS = 8  # a frame older than this no longer counts as live video
 
+# Without this flag, a program that runs without a window (pythonw) makes Windows open a new console
+# window for every adb call, which flashes terminals on screen when it loops.
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 class Latest:
     """Most recent JPEG frame and demand bookkeeping, shared between threads."""
@@ -71,7 +75,9 @@ def to_jpeg(img):
 
 def screenshot(adb, serial):
     """One raw screenshot as an RGB image (the raw header is 12 or 16 bytes depending on Android)."""
-    raw = subprocess.run([adb, '-s', serial, 'exec-out', 'screencap'], capture_output=True, timeout=15).stdout
+    raw = subprocess.run(
+        [adb, '-s', serial, 'exec-out', 'screencap'], capture_output=True, timeout=15, creationflags=NO_WINDOW
+    ).stdout
     w = int.from_bytes(raw[0:4], 'little')
     h = int.from_bytes(raw[4:8], 'little')
     offset = len(raw) - w * h * 4
@@ -109,14 +115,18 @@ def screenshots_loop(adb, serial, crop, width, fps):
 def stop_guest_recorders(adb, serial):
     """Stop any screenrecord still running inside the emulator (they pile up and slow it down)."""
     try:
-        subprocess.run([adb, '-s', serial, 'shell', 'pkill', '-INT', 'screenrecord'], capture_output=True, timeout=8)
+        subprocess.run(
+            [adb, '-s', serial, 'shell', 'pkill', '-INT', 'screenrecord'],
+            capture_output=True, timeout=8, creationflags=NO_WINDOW,
+        )
     except Exception:
         pass
 
 
 def video_loop(adb, serial, crop, width, fps):
-    """Keep trying: the emulator may still be starting, or may restart while this runs."""
+    """Keep trying, but calmly: the emulator may be closed, and retrying fast would hog the PC."""
     last_error = None
+    failures = 0
     while True:
         try:
             video_session(adb, serial, crop, width, fps)
@@ -124,7 +134,8 @@ def video_loop(adb, serial, crop, width, fps):
             if str(err) != last_error:
                 print('Esperando al emulador:', err, flush=True)
                 last_error = str(err)
-        time.sleep(3)
+        failures += 1
+        time.sleep(min(3 * failures, 30))  # 3 s, 6 s, 9 s ... up to 30 s between attempts
 
 
 def pump(proc, chunks):
@@ -152,12 +163,16 @@ def video_session(adb, serial, crop, width, fps):
         '--output-format=h264', '--size', '%dx%d' % (out_w, out_h),
         '--bit-rate', '4000000', '--time-limit', '170', '-',
     ]
+    quick_ends = 0
     while True:
         while not wanted():  # nobody is watching: leave the emulator alone
             time.sleep(0.3)
         stop_guest_recorders(adb, serial)
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        state.recording_since = time.time()
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW
+        )
+        began = time.time()
+        state.recording_since = began
         chunks = queue.Queue()
         threading.Thread(target=pump, args=(proc, chunks), daemon=True).start()
         codec = av.CodecContext.create('h264', 'r')
@@ -187,7 +202,14 @@ def video_session(adb, serial, crop, width, fps):
         finally:
             proc.kill()
             stop_guest_recorders(adb, serial)
-        time.sleep(0.3)
+        if time.time() - began < 5 and wanted():
+            # The recording died right away (emulator closed or not ready): wait longer each time
+            # instead of relaunching adb over and over.
+            quick_ends += 1
+            time.sleep(min(2 * quick_ends, 30))
+        else:
+            quick_ends = 0
+            time.sleep(0.3)
 
 
 def origin_allowed(origin):
@@ -333,7 +355,7 @@ def main():
         target, fps = screenshots_loop, min(args.fps, 4)
 
     try:
-        subprocess.run([args.adb, 'start-server'], capture_output=True, timeout=20)
+        subprocess.run([args.adb, 'start-server'], capture_output=True, timeout=20, creationflags=NO_WINDOW)
     except Exception:
         pass
     threading.Thread(target=target, args=(args.adb, args.serial, crop, args.width, fps), daemon=True).start()

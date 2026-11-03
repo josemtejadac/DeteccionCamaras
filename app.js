@@ -150,31 +150,85 @@
   }
 
   // ---------- Model ----------
-  async function loadModel() {
+  // Two sizes of the same detector: "preciso" (mobilenet_v2) sees partly hidden or seated people better but
+  // is slower; "rápido" (lite) keeps the box glued to a moving person. In "auto" the page times the precise
+  // one on this very PC and switches to the fast one if a pass takes longer than AUTO_SWITCH_MS.
+  const MODEL_PREF_KEY = 'hubvision.modelPref'; // 'auto' | 'rapido' | 'preciso'
+  const AUTO_SWITCH_MS = 220;
+  let modelPref = loadModelPref();
+  let activeModelName = '';
+  let modelLoading = false;
+
+  function loadModelPref() {
     try {
+      const saved = localStorage.getItem(MODEL_PREF_KEY);
+      return saved === 'rapido' || saved === 'preciso' ? saved : 'auto';
+    } catch {
+      return 'auto';
+    }
+  }
+
+  // Average time of one detection pass, after a warm-up pass (the first one compiles the GPU programs).
+  async function timeModel(candidate) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const c = canvas.getContext('2d');
+    for (let i = 0; i < 40; i++) {
+      c.fillStyle = 'hsl(' + ((i * 37) % 360) + ',60%,' + (20 + ((i * 13) % 60)) + '%)';
+      c.fillRect((i * 53) % 640, (i * 29) % 360, 120, 90);
+    }
+    await candidate.detect(canvas, 5, 0.9);
+    const times = [];
+    for (let i = 0; i < 4; i++) {
+      const started = performance.now();
+      await candidate.detect(canvas, 5, 0.9);
+      times.push(performance.now() - started);
+    }
+    times.sort((a, b) => a - b);
+    return (times[1] + times[2]) / 2;
+  }
+
+  async function loadModel() {
+    if (modelLoading) return;
+    modelLoading = true;
+    const choice = document.getElementById('modelChoice');
+    if (choice) choice.disabled = true;
+    const previous = model;
+    model = null;
+    updateToggleAvailability();
+    modelStatus.textContent = 'Cargando modelo…';
+    modelStatus.classList.remove('ready', 'error');
+    try {
+      let base = modelPref === 'rapido' ? 'lite_mobilenet_v2' : 'mobilenet_v2';
+      let candidate;
       try {
-        // The larger base model is slower but notably better with partly visible or seated people.
-        model = await cocoSsd.load({ base: 'mobilenet_v2' });
+        candidate = await cocoSsd.load({ base });
       } catch (err) {
-        console.warn('mobilenet_v2 unavailable, using the default model', err);
-        model = await cocoSsd.load();
+        console.warn(base + ' unavailable, using the default model', err);
+        base = 'lite_mobilenet_v2';
+        candidate = await cocoSsd.load({ base });
       }
-      // The first inference is slow (the GPU programs get compiled): do it now, not when detection starts.
-      try {
-        const warm = document.createElement('canvas');
-        warm.width = 64;
-        warm.height = 64;
-        await model.detect(warm, 1, 0.9);
-      } catch {
-        // warming up is optional
+      let ms = await timeModel(candidate);
+      if (modelPref === 'auto' && base === 'mobilenet_v2' && ms > AUTO_SWITCH_MS) {
+        candidate.dispose();
+        base = 'lite_mobilenet_v2';
+        candidate = await cocoSsd.load({ base });
+        ms = await timeModel(candidate);
       }
-      modelStatus.textContent = 'Modelo listo';
+      model = candidate;
+      if (previous && previous !== candidate) previous.dispose();
+      activeModelName = base === 'mobilenet_v2' ? 'preciso' : 'rápido';
+      modelStatus.textContent = 'Modelo ' + activeModelName + ' listo · ' + Math.round(ms) + ' ms';
       modelStatus.classList.add('ready');
-      updateToggleAvailability();
     } catch (err) {
       modelStatus.textContent = 'Error cargando el modelo';
       modelStatus.classList.add('error');
       console.error(err);
+    } finally {
+      modelLoading = false;
+      if (choice) choice.disabled = false;
+      updateToggleAvailability();
     }
   }
   let modelRequested = false;
@@ -719,7 +773,8 @@
   };
 
   function setIpcamProblem(kind) {
-    if (ipcamProblem === kind) return;
+    // With no problem the overlay must always be hidden: it may still hold the "enter the URL" prompt.
+    if (ipcamProblem === kind && kind !== null) return;
     ipcamProblem = kind;
     if (kind) {
       stageEmpty.hidden = false;
@@ -909,6 +964,7 @@
   }
 
   async function runDetection() {
+    if (!model) return; // the model is being (re)loaded
     const mediaEl = getMediaEl();
     const size = getNaturalSize();
     if (!mediaEl || !size || !size.width || !size.height) return;
@@ -1198,6 +1254,7 @@
         (latestMaxScore > 0
           ? 'Persona: ' + latestMaxScore.toFixed(2) + ' · umbral ' + personMinScore.toFixed(2)
           : 'Persona: no detectada · umbral ' + personMinScore.toFixed(2)) +
+        ' · ' + latestPersons.length + (latestPersons.length === 1 ? ' persona' : ' personas') +
         ' · ' + Math.round(latestDetectMs) + ' ms';
       ctx.font = '12px Inter, sans-serif';
       const hudWidth = ctx.measureText(hud).width + 14;
@@ -1339,6 +1396,19 @@
     }
   });
   showSensitivity();
+
+  // Model choice: automatic (default), fast or precise. Changing it reloads the model.
+  const modelChoiceEl = document.getElementById('modelChoice');
+  modelChoiceEl.value = modelPref;
+  modelChoiceEl.addEventListener('change', async () => {
+    modelPref = modelChoiceEl.value;
+    try {
+      localStorage.setItem(MODEL_PREF_KEY, modelPref);
+    } catch {
+      // storage unavailable: the choice lasts until reload
+    }
+    await loadModel();
+  });
 
   addGroupBtn.addEventListener('click', addGroup);
   newGroupInput.addEventListener('keydown', (e) => {

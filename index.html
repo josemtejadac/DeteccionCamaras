@@ -171,6 +171,12 @@
           <label for="sensitivity">Sensibilidad de detección</label>
           <input type="range" id="sensitivity" min="20" max="85" step="1" />
           <span class="sens-value" id="sensitivityValue"></span>
+          <label for="modelChoice">Modelo</label>
+          <select id="modelChoice" title="Automático mide la velocidad de este equipo y elige el mejor">
+            <option value="auto">Automático</option>
+            <option value="rapido">Rápido</option>
+            <option value="preciso">Preciso</option>
+          </select>
           <span class="hint">
             Más a la derecha detecta personas con menos certeza (útil si no te reconoce), pero puede confundir
             objetos con personas. Mientras detecta, arriba a la izquierda del video ves la confianza actual.
