@@ -78,6 +78,10 @@
   let detectionTimer = null;
   let zones = loadZones();
   let latestPersons = []; // fractional boxes, for on-screen debug only
+  let latestMaxScore = 0;
+  // Minimum confidence for a "person" to count; the admin tunes it with the sensitivity slider.
+  const SENSITIVITY_KEY = 'hubvision.personMinScore';
+  let personMinScore = loadSensitivity();
   let isDrawingZone = false;
   let dragStart = null;
   let dragCurrent = null;
@@ -104,6 +108,15 @@
   const GROUPS_KEY = 'hubvision.groups.v1';
   let customGroups = loadGroups();
   let activeGroup = '';
+
+  function loadSensitivity() {
+    try {
+      const saved = parseFloat(localStorage.getItem(SENSITIVITY_KEY));
+      return Number.isFinite(saved) && saved >= 0.15 && saved <= 0.9 ? saved : 0.35;
+    } catch {
+      return 0.35;
+    }
+  }
 
   function loadGroups() {
     try {
@@ -140,7 +153,13 @@
   // ---------- Model ----------
   async function loadModel() {
     try {
-      model = await cocoSsd.load();
+      try {
+        // The larger base model is slower but notably better with partly visible or seated people.
+        model = await cocoSsd.load({ base: 'mobilenet_v2' });
+      } catch (err) {
+        console.warn('mobilenet_v2 unavailable, using the default model', err);
+        model = await cocoSsd.load();
+      }
       modelStatus.textContent = 'Modelo listo';
       modelStatus.classList.add('ready');
       updateToggleAvailability();
@@ -719,7 +738,9 @@
 
     let predictions;
     try {
-      predictions = await model.detect(mediaEl);
+      // coco-ssd drops everything below minScore (default 0.5) itself, so ask for low scores
+      // and let the sensitivity setting decide what counts.
+      predictions = await model.detect(mediaEl, 20, 0.15);
     } catch (err) {
       console.error('Detection error', err);
       stopDetection();
@@ -728,8 +749,9 @@
       return;
     }
 
+    latestMaxScore = predictions.reduce((max, p) => (p.class === 'person' ? Math.max(max, p.score) : max), 0);
     latestPersons = predictions
-      .filter((p) => p.class === 'person' && p.score > 0.5)
+      .filter((p) => p.class === 'person' && p.score >= personMinScore)
       .map((p) => ({
         x: p.bbox[0] / size.width,
         y: p.bbox[1] / size.height,
@@ -979,6 +1001,17 @@
         ctx.strokeRect(x, y, w, h);
         ctx.setLineDash([]);
       });
+
+      // Small readout to tune the sensitivity: the best "person" confidence seen vs. the threshold.
+      const hud = latestMaxScore > 0
+        ? 'Persona: ' + latestMaxScore.toFixed(2) + ' · umbral ' + personMinScore.toFixed(2)
+        : 'Persona: no detectada · umbral ' + personMinScore.toFixed(2);
+      ctx.font = '12px Inter, sans-serif';
+      const hudWidth = ctx.measureText(hud).width + 14;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(containRect.x + 8, containRect.y + 8, hudWidth, 22);
+      ctx.fillStyle = latestMaxScore >= personMinScore ? '#4ade80' : '#fbbf24';
+      ctx.fillText(hud, containRect.x + 15, containRect.y + 23);
     }
 
     if (isDrawingZone && dragStart && dragCurrent) {
@@ -1093,6 +1126,26 @@
     renderGroupBar();
     renderTableList();
   }
+
+  // Sensitivity slider: higher sensitivity means a lower confidence threshold for "person".
+  const sensitivityEl = document.getElementById('sensitivity');
+  const sensitivityValueEl = document.getElementById('sensitivityValue');
+
+  function showSensitivity() {
+    sensitivityEl.value = Math.round((1 - personMinScore) * 100);
+    sensitivityValueEl.textContent = sensitivityEl.value + ' %';
+  }
+
+  sensitivityEl.addEventListener('input', () => {
+    personMinScore = (100 - Number(sensitivityEl.value)) / 100;
+    sensitivityValueEl.textContent = sensitivityEl.value + ' %';
+    try {
+      localStorage.setItem(SENSITIVITY_KEY, String(personMinScore));
+    } catch {
+      // storage unavailable: the setting lasts until reload
+    }
+  });
+  showSensitivity();
 
   addGroupBtn.addEventListener('click', addGroup);
   newGroupInput.addEventListener('keydown', (e) => {

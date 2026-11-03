@@ -167,6 +167,16 @@
           </div>
         </div>
 
+        <div class="detect-tools">
+          <label for="sensitivity">Sensibilidad de detección</label>
+          <input type="range" id="sensitivity" min="20" max="85" step="1" />
+          <span class="sens-value" id="sensitivityValue"></span>
+          <span class="hint">
+            Más a la derecha detecta personas con menos certeza (útil si no te reconoce), pero puede confundir
+            objetos con personas. Mientras detecta, arriba a la izquierda del video ves la confianza actual.
+          </span>
+        </div>
+
         <div class="group-bar">
           <div class="group-bar-title">Grupos de mesas</div>
           <p class="group-bar-help">

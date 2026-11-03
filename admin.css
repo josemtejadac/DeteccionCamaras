@@ -72,6 +72,25 @@
   margin: 0 auto;
 }
 
+/* Detection sensitivity */
+.detect-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  font-size: 13.5px;
+}
+
+.detect-tools label { font-weight: 600; }
+.detect-tools input[type='range'] { flex: 0 1 220px; accent-color: var(--accent); }
+.detect-tools .sens-value { font-weight: 700; min-width: 40px; }
+.detect-tools .hint { flex: 1 1 100%; }
+
 /* Group manager */
 .group-bar {
   margin-top: 14px;
