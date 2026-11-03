@@ -28,6 +28,7 @@
   const phonePanel = document.getElementById('phonePanel');
   const phoneStatus = document.getElementById('phoneStatus');
   const qrBox = document.getElementById('qrcode');
+  const startScreenBtn = document.getElementById('startScreenBtn');
   const adminBtn = document.getElementById('adminBtn');
   const loginDialog = document.getElementById('loginDialog');
   const loginForm = document.getElementById('loginForm');
@@ -175,6 +176,7 @@
   function onSourceChange(e) {
     stopDetection();
     stopPhone();
+    startScreenBtn.hidden = e.target.value !== 'screen';
     if (e.target.value === 'webcam') {
       ipcamUrlWrap.hidden = true;
       stopIpcam();
@@ -291,17 +293,30 @@
     }
   }
 
+  // Clicking an already selected radio fires no event, so sharing can be restarted from this button.
+  startScreenBtn.addEventListener('click', () => {
+    stopDetection();
+    stopWebcam();
+    startScreen();
+  });
+
   // Test source: capture a screen or window where another app (e.g. a camera's own app) shows the video.
   async function startScreen() {
     try {
-      webcamStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      // Hide the "entire screen" choice (it would capture this page too); browsers that lack these hints ignore them.
+      webcamStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+        monitorTypeSurfaces: 'exclude',
+        selfBrowserSurface: 'exclude',
+      });
       webcamStream.getVideoTracks()[0].addEventListener('ended', () => {
         stopDetection();
         stopWebcam();
         video.hidden = true;
         activeMedia = null;
         stageEmpty.hidden = false;
-        stageEmpty.textContent = 'Se dejó de compartir la pantalla. Vuelve a elegir "Capturar pantalla" para reanudar.';
+        stageEmpty.textContent = 'Se dejó de compartir. Pulsa "Elegir ventana a compartir" para reanudar.';
         updateToggleAvailability();
       });
       video.srcObject = webcamStream;
