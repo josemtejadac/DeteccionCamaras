@@ -792,19 +792,22 @@
       else rawStatus = 'free';
     }
 
-    // A change between occupied and available only shows after CONFIRM_MS of the new reading,
-    // so someone walking past a zone does not flip its state.
+    // A change between occupied and available only shows once the new reading wins a vote over the
+    // last CONFIRM_MS, so someone walking past a zone does not flip its state, and a detector that
+    // misses a frame now and then (borderline confidence) does not restart the count.
     const rawOccupied = rawStatus !== 'free';
-    if (rawOccupied === zone.occupied) {
-      zone.pendingSince = null;
-      zone.status = rawStatus;
-    } else {
-      if (!zone.pendingSince) zone.pendingSince = now;
-      if (now - zone.pendingSince >= CONFIRM_MS) {
-        zone.pendingSince = null;
-        zone.status = rawStatus;
-        zone.occupied = rawOccupied;
-      }
+    const history = zone.history || (zone.history = []);
+    history.push({ t: now, occ: rawOccupied });
+    while (now - history[0].t > CONFIRM_MS) history.shift();
+
+    if (rawOccupied === zone.occupied) zone.status = rawStatus;
+
+    const covered = CONFIRM_MS === 0 || now - history[0].t >= CONFIRM_MS * 0.85;
+    const opposite = history.filter((h) => h.occ !== zone.occupied).length / history.length;
+    if (covered && opposite >= 0.7) {
+      zone.occupied = !zone.occupied;
+      zone.status = rawOccupied === zone.occupied ? rawStatus : zone.occupied ? 'busy' : 'free';
+      zone.history = [];
     }
   }
 
