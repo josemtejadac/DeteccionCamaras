@@ -37,6 +37,21 @@ body {
   letter-spacing: 0.2px;
 }
 
+.brand-by {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+body:not(.is-admin) .brand-by { color: #5d7480; border-left-color: #c9dad6; }
+
+@media (max-width: 440px) {
+  .brand-by { display: none; }
+}
+
 .status-pill {
   font-size: 13px;
   color: var(--muted);
