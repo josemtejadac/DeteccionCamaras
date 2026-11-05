@@ -79,7 +79,7 @@
     }
   }
   const confirmParam = parseFloat(urlParams.get('confirm'));
-  const CONFIRM_MS = (Number.isFinite(confirmParam) && confirmParam >= 0 ? confirmParam : 5) * 1000;
+  const CONFIRM_MS = (Number.isFinite(confirmParam) && confirmParam >= 0 ? confirmParam : 3) * 1000;
   const AWAY_MAX_MS = 30 * 60 * 1000;
   const OBJECT_CLASSES = ['laptop', 'backpack', 'handbag', 'suitcase', 'book', 'cell phone'];
   const OBJECT_MIN_SCORE = 0.4;
@@ -1033,12 +1033,11 @@
     latestMaxScore = predictions.reduce((max, p) => (p.class === 'person' ? Math.max(max, p.score) : max), 0);
     latestPersons = predictions
       .filter((p) => p.class === 'person' && p.score >= personMinScore)
-      .map((p) => ({
-        x: p.bbox[0] / iw,
-        y: p.bbox[1] / ih,
-        w: p.bbox[2] / iw,
-        h: p.bbox[3] / ih,
-      }));
+      .map((p) => {
+        const box = { x: p.bbox[0] / iw, y: p.bbox[1] / ih, w: p.bbox[2] / iw, h: p.bbox[3] / ih };
+        box.core = personCore(box);
+        return box;
+      });
 
     const objects = predictions
       .filter((p) => OBJECT_CLASSES.includes(p.class) && p.score > OBJECT_MIN_SCORE)
@@ -1048,7 +1047,8 @@
       }));
 
     const now = Date.now();
-    zones.forEach((zone) => updateZoneStatus(zone, objects, now));
+    const presentIds = assignPersonsToZones(latestPersons);
+    zones.forEach((zone) => updateZoneStatus(zone, objects, now, presentIds));
 
     // Rebuilding the list on every pass is wasteful now that passes are frequent: only when a state changed.
     const signature = zones
@@ -1063,8 +1063,42 @@
     }
   }
 
-  function updateZoneStatus(zone, objects, now) {
-    const personPresent = latestPersons.some((p) => overlapRatio(p, zone) > 0.12);
+  // The area of a person that counts for seats: torso, hips and legs (the central half of the box, lower 55 %).
+  // The full box also takes in arms, a bent body or a walking stride, and would cover neighbouring seats.
+  function personCore(p) {
+    return { x: p.x + p.w * 0.25, y: p.y + p.h * 0.4, w: p.w * 0.5, h: p.h * 0.55 };
+  }
+
+  // Each person occupies at most ONE seat: the one their core covers most, or that holds their centre.
+  function assignPersonsToZones(persons) {
+    const present = new Set();
+    persons.forEach((p) => {
+      const core = p.core;
+      const cx = core.x + core.w / 2;
+      const cy = core.y + core.h / 2;
+      let best = null;
+      let bestScore = 0;
+      zones.forEach((z) => {
+        const cover = overlapRatio(core, z);
+        const centreInside = cx >= z.x && cx <= z.x + z.w && cy >= z.y && cy <= z.y + z.h;
+        if (cover < 0.3 && !centreInside) return;
+        const score = cover + (centreInside ? 0.5 : 0);
+        if (score > bestScore) {
+          best = z;
+          bestScore = score;
+        }
+      });
+      if (best) present.add(best.id);
+    });
+    return present;
+  }
+
+  // Someone who was only passing by (or a stray detection) must not leave a seat "held" for the grace period:
+  // the grace period only applies to a seat that was really occupied for at least this long.
+  const MIN_STAY_FOR_GRACE_MS = 15 * 1000;
+
+  function updateZoneStatus(zone, objects, now, presentIds) {
+    const personPresent = presentIds.has(zone.id);
     const objectNow = objects.some(
       (o) => o.cx >= zone.x && o.cx <= zone.x + zone.w && o.cy >= zone.y && o.cy <= zone.y + zone.h
     );
@@ -1075,13 +1109,14 @@
     if (personPresent) {
       zone.lastSeenAt = now;
       rawStatus = 'busy';
-    } else {
-      // Objects with nobody ever seen: start the clock as if the person just left.
-      if (!zone.lastSeenAt && hasObjects) zone.lastSeenAt = now;
-      const elapsed = zone.lastSeenAt ? now - zone.lastSeenAt : Infinity;
+    } else if (zone.occupied && zone.occupiedSince && zone.lastSeenAt - zone.occupiedSince >= MIN_STAY_FOR_GRACE_MS) {
+      // A seat that really was occupied: keep it held while the person is away (grace), or while belongings stay.
+      const elapsed = now - zone.lastSeenAt;
       if (elapsed < GRACE_MS) rawStatus = 'grace';
       else if (hasObjects && elapsed < AWAY_MAX_MS) rawStatus = 'away';
       else rawStatus = 'free';
+    } else {
+      rawStatus = 'free'; // nobody there, and no confirmed stay to hold: it is available
     }
 
     // A change between occupied and available only shows once the new reading wins a vote over the
@@ -1094,11 +1129,13 @@
 
     if (rawOccupied === zone.occupied) zone.status = rawStatus;
 
-    const covered = CONFIRM_MS === 0 || now - history[0].t >= CONFIRM_MS * 0.85;
+    const covered = CONFIRM_MS === 0 || now - history[0].t >= CONFIRM_MS * 0.95;
     const opposite = history.filter((h) => h.occ !== zone.occupied).length / history.length;
-    if (covered && opposite >= 0.7) {
+    if (covered && opposite >= 0.75) {
       zone.occupied = !zone.occupied;
       zone.status = rawOccupied === zone.occupied ? rawStatus : zone.occupied ? 'busy' : 'free';
+      zone.occupiedSince = zone.occupied ? now : null;
+      if (!zone.occupied) zone.lastSeenAt = null;
       zone.history = [];
     }
   }
@@ -1130,6 +1167,18 @@
       'Arrastra sobre el video para dibujar el puesto' +
       (activeGroup ? ' del grupo ' + activeGroup : '') +
       ', o toca un punto para uno de tamaño estándar.';
+  });
+
+  document.getElementById('resetStates').addEventListener('click', () => {
+    zones.forEach((z) => {
+      z.occupied = false;
+      z.status = 'free';
+      z.lastSeenAt = null;
+      z.occupiedSince = null;
+      z.history = [];
+    });
+    lastRenderSignature = '';
+    renderTableList();
   });
 
   clearZonesBtn.addEventListener('click', () => {
@@ -1290,11 +1339,21 @@
         const y = containRect.y + p.y * containRect.height;
         const w = p.w * containRect.width;
         const h = p.h * containRect.height;
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = 'rgba(59,130,246,0.9)';
+        // The whole detection box, faint; and the core area that decides which seat a person holds, solid.
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(59,130,246,0.35)';
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x, y, w, h);
         ctx.setLineDash([]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(59,130,246,0.95)';
+        ctx.fillStyle = 'rgba(59,130,246,0.12)';
+        const cx0 = containRect.x + p.core.x * containRect.width;
+        const cy0 = containRect.y + p.core.y * containRect.height;
+        const cw = p.core.w * containRect.width;
+        const ch = p.core.h * containRect.height;
+        ctx.fillRect(cx0, cy0, cw, ch);
+        ctx.strokeRect(cx0, cy0, cw, ch);
       });
 
       // Small readout to tune the sensitivity: the best "person" confidence seen vs. the threshold.
@@ -1552,6 +1611,16 @@
     state.className = 'state';
     state.textContent = statusText(zone);
 
+    // A seat held by the grace period (or by belongings) can be freed by hand, e.g. when someone moved seats.
+    let release = null;
+    if (zone.status === 'grace' || zone.status === 'away') {
+      release = document.createElement('button');
+      release.className = 'release';
+      release.textContent = 'Liberar';
+      release.title = 'Marcar este puesto como libre ahora';
+      release.addEventListener('click', () => releaseZone(zone));
+    }
+
     const remove = document.createElement('button');
     remove.className = 'remove';
     remove.textContent = '✕';
@@ -1561,8 +1630,20 @@
       renderTableList();
     });
 
-    li.append(dot, nameInput, groupField, state, remove);
+    li.append(dot, nameInput, groupField, state);
+    if (release) li.appendChild(release);
+    li.appendChild(remove);
     return li;
+  }
+
+  function releaseZone(zone) {
+    zone.occupied = false;
+    zone.status = 'free';
+    zone.lastSeenAt = null;
+    zone.occupiedSince = null;
+    zone.history = [];
+    lastRenderSignature = '';
+    renderTableList();
   }
 
   function renderTableList() {

@@ -192,6 +192,13 @@ button.primary-soft {
   color: #fff;
 }
 
+.table-row .release {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 /* Group headers in the sidebar list */
 .group-header .group-name {
   flex: 1;
