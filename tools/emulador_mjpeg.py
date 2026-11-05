@@ -260,6 +260,9 @@ class Handler(BaseHTTPRequestHandler):
         if fresh:
             self.send_response(200)
             self.send_cors()
+            # How old this image is, so HubVision can show whether the picture it analyses is current.
+            self.send_header('X-Frame-Age', str(int((time.time() - ts) * 1000)))
+            self.send_header('Access-Control-Expose-Headers', 'X-Frame-Age')
             self.send_header('Content-Type', 'image/jpeg')
             self.send_header('Content-Length', str(len(frame)))
             self.end_headers()

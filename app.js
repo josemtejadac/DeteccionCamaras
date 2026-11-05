@@ -63,8 +63,21 @@
   // ?grace=<minutes> in the URL overrides the grace period (handy for demos and tests).
   // ?confirm=<seconds> overrides the confirmation time (0 disables it).
   const urlParams = new URLSearchParams(location.search);
+  // The grace period (minutes) is adjustable in the admin panel; ?grace= in the URL still overrides it.
+  const GRACE_KEY = 'hubvision.graceMinutes';
   const graceParam = parseFloat(urlParams.get('grace'));
-  const GRACE_MS = (Number.isFinite(graceParam) && graceParam >= 0 ? graceParam : 8) * 60 * 1000;
+  let graceMinutes = loadGraceMinutes();
+  let GRACE_MS = graceMinutes * 60 * 1000;
+
+  function loadGraceMinutes() {
+    if (Number.isFinite(graceParam) && graceParam >= 0) return graceParam;
+    try {
+      const saved = parseFloat(localStorage.getItem(GRACE_KEY));
+      return Number.isFinite(saved) && saved >= 0 && saved <= 30 ? saved : 8;
+    } catch {
+      return 8;
+    }
+  }
   const confirmParam = parseFloat(urlParams.get('confirm'));
   const CONFIRM_MS = (Number.isFinite(confirmParam) && confirmParam >= 0 ? confirmParam : 5) * 1000;
   const AWAY_MAX_MS = 30 * 60 * 1000;
@@ -943,6 +956,18 @@
   const detectCtx = detectCanvas.getContext('2d');
   const DETECT_MAX_WIDTH = 640;
 
+  let usingHelperFrames = false;
+  let latestFrameAgeMs = 0;
+
+  async function grabHelperFrame() {
+    const base = ipcamBase(ipcamTarget);
+    if (!base) return null;
+    const res = await fetch(base.origin + '/frame.jpg?t=' + Date.now(), { cache: 'no-store' });
+    if (res.status !== 200) return null;
+    latestFrameAgeMs = Number(res.headers.get('X-Frame-Age')) || 0;
+    return createImageBitmap(await res.blob());
+  }
+
   function detectionInput(mediaEl, size) {
     const scale = Math.min(1, DETECT_MAX_WIDTH / size.width);
     const w = Math.round(size.width * scale);
@@ -965,9 +990,25 @@
 
   async function runDetection() {
     if (!model) return; // the model is being (re)loaded
-    const mediaEl = getMediaEl();
-    const size = getNaturalSize();
+    let mediaEl = getMediaEl();
+    let size = getNaturalSize();
     if (!mediaEl || !size || !size.width || !size.height) return;
+
+    // With the local emulator tool, ask it for its latest frame instead of copying the continuous video:
+    // the picture analysed is then always the newest one, whatever the browser does with the stream.
+    let bitmap = null;
+    usingHelperFrames = false;
+    if (activeMedia === 'img' && isLocalHelper(ipcamTarget)) {
+      try {
+        bitmap = await grabHelperFrame();
+      } catch {
+        bitmap = null;
+      }
+      if (!bitmap) return;
+      usingHelperFrames = true;
+      mediaEl = bitmap;
+      size = { width: bitmap.width, height: bitmap.height };
+    }
 
     let predictions;
     let input;
@@ -983,6 +1024,8 @@
       modelStatus.classList.add('error');
       return;
     }
+
+    if (bitmap) bitmap.close();
 
     // Boxes come back in the pixels of the canvas the model saw: normalise by that size.
     const iw = input.width;
@@ -1008,7 +1051,12 @@
     zones.forEach((zone) => updateZoneStatus(zone, objects, now));
 
     // Rebuilding the list on every pass is wasteful now that passes are frequent: only when a state changed.
-    const signature = zones.map((z) => z.id + ':' + z.status + ':' + z.occupied).join('|');
+    const signature = zones
+      .map((z) => {
+        const left = z.status === 'grace' ? Math.ceil(Math.max(0, GRACE_MS - (now - z.lastSeenAt)) / 60000) : '';
+        return z.id + ':' + z.status + ':' + z.occupied + ':' + left;
+      })
+      .join('|');
     if (signature !== lastRenderSignature) {
       lastRenderSignature = signature;
       renderTableList();
@@ -1227,7 +1275,7 @@
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
 
-      const label = zone.name + ' · ' + STATUS_LABELS[zone.status || 'free'].toLowerCase();
+      const label = zone.name + ' · ' + statusText(zone).toLowerCase();
       ctx.font = '13px Inter, sans-serif';
       const labelWidth = ctx.measureText(label).width + 10;
       ctx.fillStyle = color;
@@ -1255,7 +1303,8 @@
           ? 'Persona: ' + latestMaxScore.toFixed(2) + ' · umbral ' + personMinScore.toFixed(2)
           : 'Persona: no detectada · umbral ' + personMinScore.toFixed(2)) +
         ' · ' + latestPersons.length + (latestPersons.length === 1 ? ' persona' : ' personas') +
-        ' · ' + Math.round(latestDetectMs) + ' ms';
+        ' · ' + Math.round(latestDetectMs) + ' ms' +
+        (usingHelperFrames ? ' · imagen de hace ' + latestFrameAgeMs + ' ms' : '');
       ctx.font = '12px Inter, sans-serif';
       const hudWidth = ctx.measureText(hud).width + 14;
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -1279,6 +1328,15 @@
     requestAnimationFrame(draw);
   }
   requestAnimationFrame(draw);
+
+  // Text for a seat's state; while it is held occupied by the grace period it says how long is left.
+  function statusText(zone) {
+    if (zone.status === 'grace' && zone.lastSeenAt && GRACE_MS > 0) {
+      const mins = Math.ceil(Math.max(0, GRACE_MS - (Date.now() - zone.lastSeenAt)) / 60000);
+      return 'Ocupado · ausente (libera en ' + mins + ' min)';
+    }
+    return STATUS_LABELS[zone.status || 'free'];
+  }
 
   const PUBLIC_LABELS = { busy: 'Ocupado', grace: 'Ocupado', away: 'Ausente temporal', free: 'Libre' };
 
@@ -1311,18 +1369,30 @@
     groupChipsEl.innerHTML = '';
     allGroupNames().forEach((name) => {
       const count = zones.filter((z) => z.group === name).length;
-      const chip = document.createElement('button');
-      chip.type = 'button';
+      const chip = document.createElement('span');
       chip.className = 'chip' + (activeGroup === name ? ' active' : '');
-      chip.append(document.createTextNode(name + ' '));
+
+      const pick = document.createElement('button');
+      pick.type = 'button';
+      pick.className = 'chip-pick';
+      pick.append(document.createTextNode(name + ' '));
       const small = document.createElement('small');
       small.textContent = count + (count === 1 ? ' puesto' : ' puestos');
-      chip.appendChild(small);
-      chip.addEventListener('click', () => {
+      pick.appendChild(small);
+      pick.addEventListener('click', () => {
         activeGroup = name;
         zoneHint.textContent = defaultZoneHint();
         renderGroupBar();
       });
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'chip-del';
+      del.textContent = '✕';
+      del.title = 'Eliminar el grupo';
+      del.addEventListener('click', () => deleteGroup(name));
+
+      chip.append(pick, del);
       groupChipsEl.appendChild(chip);
     });
   }
@@ -1359,15 +1429,26 @@
   }
 
   function deleteGroup(key) {
-    const seats = zones.filter((z) => (z.group || '') === key).length;
     const label = key || 'Sin grupo';
-    const msg = seats
-      ? '¿Eliminar el grupo "' + label + '"? Sus ' + seats + ' puestos pasarán a "Sin grupo".'
-      : '¿Eliminar el grupo "' + label + '"?';
-    if (!confirm(msg)) return;
-    zones.forEach((z) => {
-      if ((z.group || '') === key) z.group = '';
-    });
+    const seats = zones.filter((z) => (z.group || '') === key);
+    if (seats.length) {
+      if (
+        confirm(
+          '¿Eliminar el grupo "' + label + '" junto con sus ' + seats.length + ' puestos?\n\n' +
+            'Aceptar: se borran el grupo y sus puestos.\nCancelar: te pregunto si prefieres conservar los puestos.'
+        )
+      ) {
+        zones = zones.filter((z) => (z.group || '') !== key);
+      } else if (confirm('¿Solo quitar el grupo y dejar sus ' + seats.length + ' puestos como "Sin grupo"?')) {
+        seats.forEach((z) => {
+          z.group = '';
+        });
+      } else {
+        return;
+      }
+    } else if (!confirm('¿Eliminar el grupo "' + label + '"?')) {
+      return;
+    }
     customGroups = customGroups.filter((g) => g !== key);
     if (activeGroup === key) activeGroup = '';
     saveZones();
@@ -1396,6 +1477,23 @@
     }
   });
   showSensitivity();
+
+  // Grace period slider (minutes).
+  const graceRangeEl = document.getElementById('graceRange');
+  const graceValueEl = document.getElementById('graceValue');
+  graceRangeEl.value = Math.min(15, Math.round(graceMinutes));
+  graceValueEl.textContent = graceRangeEl.value + ' min';
+  graceRangeEl.addEventListener('input', () => {
+    graceMinutes = Number(graceRangeEl.value);
+    GRACE_MS = graceMinutes * 60 * 1000;
+    graceValueEl.textContent = graceMinutes + ' min';
+    try {
+      localStorage.setItem(GRACE_KEY, String(graceMinutes));
+    } catch {
+      // storage unavailable: the setting lasts until reload
+    }
+    lastRenderSignature = '';
+  });
 
   // Model choice: automatic (default), fast or precise. Changing it reloads the model.
   const modelChoiceEl = document.getElementById('modelChoice');
@@ -1452,7 +1550,7 @@
 
     const state = document.createElement('span');
     state.className = 'state';
-    state.textContent = STATUS_LABELS[zone.status || 'free'];
+    state.textContent = statusText(zone);
 
     const remove = document.createElement('button');
     remove.className = 'remove';
