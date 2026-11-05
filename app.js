@@ -1455,8 +1455,9 @@
       const h = zone.h * containRect.height;
 
       ctx.lineWidth = 2;
-      const color = zone.status === 'away' ? '#f59e0b' : zone.occupied ? '#ef4444' : '#22c55e';
-      const tint = zone.status === 'away' ? 'rgba(245,158,11,0.15)' : zone.occupied ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.12)';
+      const awayNow = zone.status === 'away' || zone.status === 'grace';
+      const color = awayNow ? '#f59e0b' : zone.occupied ? '#ef4444' : '#22c55e';
+      const tint = awayNow ? 'rgba(245,158,11,0.15)' : zone.occupied ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.12)';
       ctx.strokeStyle = color;
       ctx.fillStyle = tint;
       ctx.fillRect(x, y, w, h);
@@ -1535,7 +1536,7 @@
     return STATUS_LABELS[zone.status || 'free'];
   }
 
-  const PUBLIC_LABELS = { busy: 'Ocupado', grace: 'Ocupado', away: 'Ausente temporal', free: 'Libre' };
+  const PUBLIC_LABELS = { busy: 'Ocupado', grace: 'Ausente temporal', away: 'Ausente temporal', free: 'Libre' };
 
   function groupZones() {
     const groups = [];
@@ -1718,7 +1719,7 @@
 
   function buildZoneRow(zone) {
     const li = document.createElement('li');
-    li.className = 'table-row' + (zone.status === 'away' ? ' away' : zone.occupied ? ' busy' : '');
+    li.className = 'table-row' + (zone.status === 'away' || zone.status === 'grace' ? ' away' : zone.occupied ? ' busy' : '');
 
     const dot = document.createElement('span');
     dot.className = 'dot';
@@ -1889,7 +1890,8 @@
       const seats = document.createElement('div');
       seats.className = 'pv-seats';
       g.zones.forEach((z) => {
-        const status = z.status === 'away' ? 'away' : z.occupied ? 'busy' : 'free';
+        // A seat whose person stepped away for a moment (grace period) or left belongings shows as "away", not "busy".
+        const status = z.status === 'away' || z.status === 'grace' ? 'away' : z.occupied ? 'busy' : 'free';
         const seat = document.createElement('span');
         seat.className = 'pv-seat ' + status;
         seat.title = PUBLIC_LABELS[z.status || 'free'];
