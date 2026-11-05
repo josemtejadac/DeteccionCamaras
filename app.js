@@ -104,6 +104,25 @@
 
   // Live sharing: the admin browser hosts a fixed PeerJS id and pushes table states to public viewers.
   const LIVE_PEER_ID = 'hubvision-live-7f3a9c2e';
+
+  // Relay: the direct browser-to-browser link (above) fails on some browsers or networks (VPN, WebRTC
+  // protection), so the admin also posts the seat states to a public message service (ntfy.sh, no account)
+  // on a secret channel, and the public view listens there. Only states are sent, never video or images.
+  const RELAY_TOPIC = 'hubvision-cf2aadb520892279f6a4';
+  const RELAY_URL = 'https://ntfy.sh/' + RELAY_TOPIC;
+  const RELAY_MIN_GAP_MS = 3000; // at most one post every 3 s: changes are merged
+  const RELAY_HEARTBEAT_MS = 10 * 60 * 1000; // re-post now and then so the latest state stays available
+  const RELAY_MAX_AGE_MS = 30 * 60 * 1000; // a state older than this says nothing about now
+  const RELAY_FRESH_S = 12 * 60; // quiet for longer than a heartbeat plus a margin: no longer "live"
+  const STATUS_TO_CODE = { free: 'f', busy: 'b', grace: 'g', away: 'a' };
+  const CODE_TO_STATUS = { f: 'free', b: 'busy', g: 'grace', a: 'away' };
+  let relayLastKey = '';
+  let relayLastSentAt = 0;
+  let relayTimer = null;
+  let relayHeartbeat = null;
+  let relaySource = null;
+  let viewerAppliedTs = 0;
+  let viewerLastKind = 'p2p';
   let livePeer = null;
   let liveConns = [];
   let liveHeartbeat = null;
@@ -266,11 +285,12 @@
     adminBtn.textContent = admin ? 'Cerrar sesión' : 'Admin';
     if (admin) {
       clearInterval(demoTimer);
-      stopLiveViewer();
+      stopViewerAll();
       zones = loadZones();
       zoneCounter = zones.reduce((max, z) => Math.max(max, z.n || 0), 0);
       renderTableList();
       startLiveHost();
+      startRelayHost();
       ensureModel();
       zoneHint.textContent = defaultZoneHint();
       // No source is preselected: the admin picks one (the webcam prompt used to block the page on load).
@@ -279,6 +299,7 @@
     } else {
       stopDetection();
       stopLiveHost();
+      stopRelayHost();
       stopWebcam();
       stopPhone();
       stopIpcam();
@@ -286,9 +307,15 @@
       updateToggleAvailability();
       // The public view shows what the admin session publishes, never this browser's saved tables.
       zones = [];
+      viewerAppliedTs = 0;
       renderTableList();
-      if (urlParams.has('demo')) startDemo();
-      else startLiveViewer();
+      if (urlParams.has('demo')) {
+        startDemo();
+      } else {
+        startViewerClock();
+        startRelayViewer();
+        startLiveViewer();
+      }
     }
   }
 
@@ -372,7 +399,54 @@
     };
   }
 
+  // ---- Relay (admin side) ----
+  function relayBody(isDetecting) {
+    return JSON.stringify({
+      t: Date.now(),
+      d: isDetecting ? 1 : 0,
+      z: zones.map((z) => [z.name, z.group || '', STATUS_TO_CODE[z.status || 'free'] || 'f']),
+    });
+  }
+
+  function sendRelay() {
+    relayLastSentAt = Date.now();
+    fetch(RELAY_URL, { method: 'POST', body: relayBody(detecting) }).catch(() => {
+      // offline or blocked: the next change tries again
+    });
+  }
+
+  function publishRelay(force) {
+    if (!isAdmin()) return;
+    const key = JSON.stringify([detecting, zones.map((z) => [z.name, z.group, z.status])]);
+    if (!force && key === relayLastKey) return;
+    relayLastKey = key;
+    clearTimeout(relayTimer);
+    relayTimer = setTimeout(sendRelay, Math.max(0, RELAY_MIN_GAP_MS - (Date.now() - relayLastSentAt)));
+  }
+
+  function startRelayHost() {
+    clearInterval(relayHeartbeat);
+    relayHeartbeat = setInterval(() => publishRelay(true), RELAY_HEARTBEAT_MS);
+    relayLastKey = '';
+    publishRelay(true);
+  }
+
+  function stopRelayHost() {
+    clearInterval(relayHeartbeat);
+    clearTimeout(relayTimer);
+    relayHeartbeat = null;
+  }
+
+  // Tell the public view that monitoring ended (best effort: sendBeacon survives closing the tab).
+  function announceOffline() {
+    if (!isAdmin() || !navigator.sendBeacon) return;
+    navigator.sendBeacon(RELAY_URL, relayBody(false));
+  }
+
+  window.addEventListener('pagehide', announceOffline);
+
   function broadcastLive(force) {
+    publishRelay(false);
     if (!livePeer || !liveConns.length) return;
     const snap = liveSnapshot();
     const key = JSON.stringify([snap.detecting, snap.zones]);
@@ -430,13 +504,74 @@
 
   const NO_LIVE_INFO = 'Sin información en vivo por ahora';
 
+  // Only speak about the P2P link when no data has arrived from anywhere yet (the relay may be delivering).
+  function p2pNote(text) {
+    if (!viewerLastMsg) setLiveStatus(text);
+  }
+
+  // One entry point for what the public view shows, whichever way the data came (direct link or relay).
+  function applySnapshot(list, isDetecting, ts, kind, receivedAt) {
+    if (ts < viewerAppliedTs) return; // older than what is already shown (e.g. the relay replaying its last post)
+    viewerAppliedTs = ts;
+    viewerLastMsg = receivedAt;
+    viewerLastKind = kind;
+    zones = list;
+    setLiveStatus(isDetecting ? 'En vivo' : 'Última información disponible', isDetecting);
+    renderTableList();
+  }
+
+  function ageText(secs) {
+    return secs < 90 ? secs + ' s' : Math.round(secs / 60) + ' min';
+  }
+
+  function startViewerClock() {
+    clearInterval(viewerStaleTimer);
+    viewerStaleTimer = setInterval(() => {
+      if (!viewerLastMsg) return;
+      const secs = Math.max(0, Math.floor((Date.now() - viewerLastMsg) / 1000));
+      pubUpdatedEl.textContent = secs < 5 ? 'Actualizado ahora' : 'Actualizado hace ' + ageText(secs);
+      const limit = viewerLastKind === 'relay' ? RELAY_FRESH_S : 15;
+      if (secs > limit) setLiveStatus(NO_LIVE_INFO + ' (datos de hace ' + ageText(secs) + ')', false);
+    }, 1000);
+  }
+
+  // ---- Relay (public side) ----
+  function startRelayViewer() {
+    if (relaySource || typeof EventSource === 'undefined') return;
+    relaySource = new EventSource(RELAY_URL + '/sse?since=latest'); // replays the last post, then streams new ones
+    relaySource.onmessage = (event) => {
+      try {
+        const wrapper = JSON.parse(event.data);
+        if (wrapper.event !== 'message') return;
+        const snap = JSON.parse(wrapper.message);
+        const sentAt = (wrapper.time || 0) * 1000;
+        if (Date.now() - sentAt > RELAY_MAX_AGE_MS) return;
+        const list = snap.z.map(([name, group, code], i) => {
+          const status = CODE_TO_STATUS[code] || 'free';
+          return { id: 'r' + i, name, group, status, occupied: status !== 'free' };
+        });
+        applySnapshot(list, !!snap.d, snap.t, 'relay', sentAt);
+      } catch {
+        // ignore malformed posts
+      }
+    };
+    // EventSource reconnects by itself if the connection drops.
+  }
+
+  function stopRelayViewer() {
+    if (relaySource) {
+      relaySource.close();
+      relaySource = null;
+    }
+  }
+
   function startLiveViewer() {
     if (livePeer) return;
     if (typeof Peer === 'undefined') {
-      setLiveStatus(NO_LIVE_INFO);
+      p2pNote(NO_LIVE_INFO);
       return;
     }
-    setLiveStatus('Conectando…');
+    p2pNote('Conectando…');
     const peer = new Peer();
     livePeer = peer;
     peer.on('open', connectToHost);
@@ -445,22 +580,16 @@
     });
     peer.on('error', (err) => {
       if (err.type === 'peer-unavailable') {
-        setLiveStatus(NO_LIVE_INFO);
+        p2pNote(NO_LIVE_INFO);
         scheduleViewerRetry();
       } else {
         stopLiveViewer();
-        setLiveStatus(NO_LIVE_INFO);
+        p2pNote(NO_LIVE_INFO);
         setTimeout(() => {
           if (!isAdmin()) startLiveViewer();
         }, 5000);
       }
     });
-    viewerStaleTimer = setInterval(() => {
-      if (!viewerLastMsg) return;
-      const secs = Math.floor((Date.now() - viewerLastMsg) / 1000);
-      pubUpdatedEl.textContent = secs < 5 ? 'Actualizado ahora' : 'Actualizado hace ' + secs + ' s';
-      if (secs > 15) setLiveStatus(NO_LIVE_INFO + ' (datos de hace ' + secs + ' s)', false);
-    }, 1000);
   }
 
   function connectToHost() {
@@ -472,19 +601,16 @@
     clearTimeout(viewerWatch);
     viewerWatch = setTimeout(() => {
       if (!viewerLastMsg && !isAdmin()) {
-        setLiveStatus(NO_LIVE_INFO);
+        p2pNote(NO_LIVE_INFO);
         scheduleViewerRetry();
       }
     }, 12000);
     conn.on('data', (msg) => {
       if (!msg || msg.type !== 'state' || !Array.isArray(msg.zones)) return;
-      viewerLastMsg = Date.now();
-      zones = msg.zones.map((z) => ({ ...z }));
-      setLiveStatus(msg.detecting ? 'En vivo' : 'Última información disponible', msg.detecting);
-      renderTableList();
+      applySnapshot(msg.zones.map((z) => ({ ...z })), !!msg.detecting, msg.ts || Date.now(), 'p2p', Date.now());
     });
     conn.on('close', () => {
-      setLiveStatus('Reconectando…');
+      if (viewerLastKind === 'p2p') p2pNote('Reconectando…');
       scheduleViewerRetry();
     });
   }
@@ -496,11 +622,10 @@
     }, 5000);
   }
 
+  // Stops only the direct (browser-to-browser) viewer link; the relay and what is shown stay as they are.
   function stopLiveViewer() {
     clearTimeout(viewerRetry);
     clearTimeout(viewerWatch);
-    clearInterval(viewerStaleTimer);
-    viewerLastMsg = 0;
     if (viewerConn) {
       viewerConn.close();
       viewerConn = null;
@@ -509,11 +634,21 @@
       livePeer.destroy();
       livePeer = null;
     }
+  }
+
+  // Stops everything the public view uses (used when an admin session starts).
+  function stopViewerAll() {
+    stopLiveViewer();
+    stopRelayViewer();
+    clearInterval(viewerStaleTimer);
+    viewerLastMsg = 0;
+    viewerAppliedTs = 0;
     liveStatusEl.hidden = true;
   }
 
   adminBtn.addEventListener('click', () => {
     if (isAdmin()) {
+      announceOffline();
       try {
         sessionStorage.removeItem(ADMIN_KEY);
       } catch {
@@ -1069,26 +1204,29 @@
     return { x: p.x + p.w * 0.25, y: p.y + p.h * 0.4, w: p.w * 0.5, h: p.h * 0.55 };
   }
 
-  // Each person occupies at most ONE seat: the one their core covers most, or that holds their centre.
+  // Each person occupies at most ONE seat, and each seat holds at most one person: the pairs (person, seat) are
+  // taken from the best match down, so two people sitting side by side do not both claim the same seat, and a
+  // seat next to the one a person sits on is never marked just because their body spills over it.
   function assignPersonsToZones(persons) {
-    const present = new Set();
-    persons.forEach((p) => {
+    const candidates = [];
+    persons.forEach((p, pi) => {
       const core = p.core;
       const cx = core.x + core.w / 2;
       const cy = core.y + core.h / 2;
-      let best = null;
-      let bestScore = 0;
       zones.forEach((z) => {
         const cover = overlapRatio(core, z);
         const centreInside = cx >= z.x && cx <= z.x + z.w && cy >= z.y && cy <= z.y + z.h;
         if (cover < 0.3 && !centreInside) return;
-        const score = cover + (centreInside ? 0.5 : 0);
-        if (score > bestScore) {
-          best = z;
-          bestScore = score;
-        }
+        candidates.push({ pi, id: z.id, score: cover + (centreInside ? 0.5 : 0) });
       });
-      if (best) present.add(best.id);
+    });
+    candidates.sort((a, b) => b.score - a.score);
+    const present = new Set();
+    const usedPersons = new Set();
+    candidates.forEach((c) => {
+      if (usedPersons.has(c.pi) || present.has(c.id)) return;
+      usedPersons.add(c.pi);
+      present.add(c.id);
     });
     return present;
   }
